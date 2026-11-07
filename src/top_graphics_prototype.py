@@ -9,13 +9,21 @@ Dependências:
 ================================================================================
 """
 
-# TODO: remover o Wingman / Iceman para simplificar o projeto
-# TODO: ter trem de pouso retrátil
-# TODO: possibilitar o caça ficar parado (throttle 0) caso esteja no chão 
-# TODO: ter colisão do porta aviões com o trem de pouso
-# TODO: ter colisão do caça com a água no cenário 1 e com as rochas/solo do cenário 2 ("gameover" para reset caso seja mais fácil)
 # TODO: modularizar o projeto (arquitetura planejada na proposta)
+# TODO: modelar o F14-TC
+# melhorias/incrementos posteriores, n urgentes
+# TODO: modelar movimento dos tailerons e spoilers de asa na rolagem, profundores na arfagem e do leme de direção na guinada (já tem em partes)
+# TODO: possibilitar ativar e desativar os afterburners para aumentar velocidade
+# TODO: integração com controle
 # TODO: implementar as texturas em assets
+# TODO: fazer nuvens geradas proceduralmente (vapor meio transparente, n solido)
+# TODO: implement procedurally generated rocks for scenario 2 (use same texture and has colision)
+# TODO: implementar sound effects (som dos motores, som ambiente do oceano e trilha sonora q pode ser mutada)
+# TODO: menu pro projeto (titulo, seletor de cena e mapa de controles na mesma tela)
+# TODO: "skins" para escolher para o F14
+# TODO: implement Scenario 3 (just the aircraft in camera 3 for model analisys and reaction of the controls)
+# TODO: makefile com configuracao de .env
+# TODO: renderizar mais mapa conforme a necessidade ou colocar um limitador de mapa visual
 
 import sys
 import math
@@ -33,11 +41,20 @@ except ImportError as e:
 
 
 # ==============================================================================
-# 1. MATEMÁTICA VETORIAL E CINEMÁTICA 6-DOF (SEM GIMBAL LOCK)
+# CONSTANTES GEOMÉTRICAS DO PORTA-AVIÕES E COLISÃO
+# ==============================================================================
+CARRIER_DECK_Y = 10.15          # Altura da superfície da pista do porta-aviões
+CARRIER_DECK_HALF_W = 24.0      # Meia-largura do convés (-24 a +24 no eixo X)
+CARRIER_DECK_HALF_L = 115.0     # Meio-comprimento do convés (-115 a +115 no eixo Z)
+GEAR_HEIGHT_OFFSET = 1.45       # Altura do eixo central do F-14 até a base das rodas
+
+
+# ==============================================================================
+# 1. MATEMÁTICA VETORIAL E FUNÇÃO DE TERRENO DO CÂNION
 # ==============================================================================
 
 def normalize(v):
-    """Normaliza um vetor 3D."""
+    """Normaliza um vetdwaor 3D."""
     norm = np.linalg.norm(v)
     return v / norm if norm > 1e-8 else v
 
@@ -61,47 +78,111 @@ def compute_normal(p1, p2, p3):
     return normalize(n)
 
 
+def canyon_height_func(x, z):
+    """
+    Função matemática f(x, z) que esculpe um corredor sinuoso ("Trench Run")
+    com fundo plano navegável e paredões rochosos escarpados nas laterais.
+    Usada tanto para gerar a malha 3D quanto para checar colisão exata com a rocha.
+    """
+    center_x = 55.0 * math.sin(z * 0.0045) + 25.0 * math.cos(z * 0.011)
+    dist = abs(x - center_x)
+
+    canyon_wall = max(0.0, dist - 42.0)
+    wall_height = min(165.0, (canyon_wall ** 1.35) * 0.65)
+
+    roughness = (
+        14.0 * math.sin(x * 0.045) * math.cos(z * 0.045)
+        + 7.0 * math.sin(x * 0.11 + z * 0.09)
+    )
+    if dist < 42.0:
+        return 2.0 + 1.2 * math.sin(x * 0.08) * math.cos(z * 0.08)
+    return max(2.0, wall_height + roughness)
+
+
+# ==============================================================================
+# 2. CLASSE DO CAÇA F-14 TOMCAT (CINEMÁTICA 6-DOF, SOLO, TREM DE POUSO E COLISÃO)
+# ==============================================================================
+
 class Aircraft:
     """
-    Representa um caça F-14 Tomcat no espaço 3D com referencial ortonormal local (F, U, R)
-    e parâmetros de animação hierárquica (RD08).
+    Representa o caça F-14 Tomcat no espaço 3D com referencial ortonormal local (F, U, R),
+    estados de solo/porta-aviões, trem de pouso retrátil e detecção de colisão.
     """
-    def __init__(self, pos=(0.0, 25.0, 0.0), is_wingman=False):
-        self.pos = np.array(pos, dtype=np.float32)
-        # Base vetorial ortogonal local: Frente (-Z inicial), Cima (+Y), Direita (+X)
+    def __init__(self):
+        self.pos = np.array([0.0, CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET, 95.0], dtype=np.float32)
         self.forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         self.right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
-        self.speed = 45.0
-        self.min_speed = 15.0
+        self.speed = 0.0
+        self.min_flight_speed = 28.0   # Velocidade mínima de sustentação (stall/takeoff)
         self.max_speed = 140.0
-        self.throttle = 0.35  # 0.0 a 1.0
+        self.throttle = 0.0            # 0.0 (parado no chão) a 1.0 (pós-combustão máxima)
+
+        # Estado de solo e trem de pouso retrátil (RD08)
+        self.on_ground = True
+        self.gear_down = True          # Comando lógico do trem de pouso (Tecla 'E')
+        self.gear_deploy = 1.0         # Estado contínuo da animação: 1.0 (baixado) a 0.0 (recolhido)
+
+        # Estado de colisão / Game Over
+        self.crashed = False
+        self.crash_reason = ""
+        self.crash_timer = 0.0
 
         # Parâmetros de transformações geométricas filhas (RD08)
         self.wing_sweep_angle = 20.0   # 20 graus (aberta) até 68 graus (fechada/supersônica)
         self.auto_wing_sweep = True
-        self.elevator_pitch = 0.0      # Ângulo atual dos profundores
-        self.elevator_roll = 0.0       # Diferencial dos profundores (tailerons)
-        self.rudder_yaw = 0.0          # Ângulo dos lemes duplos
-        self.is_wingman = is_wingman
+        self.elevator_pitch = 0.0
+        self.elevator_roll = 0.0
+        self.rudder_yaw = 0.0
 
     def reset(self, scene_mode):
-        """Reposiciona a aeronave no início do cenário selecionado."""
-        if scene_mode == 1:
-            # Posicionado próximo ao Porta-Aviões para aproximação/sobrevoo
-            self.pos = np.array([0.0, 18.0, 140.0], dtype=np.float32)
-            self.speed = 40.0
-            self.throttle = 0.30
-        else:
-            # Entrada do Cânion Procedural (Trench Run)
-            self.pos = np.array([0.0, 35.0, 350.0], dtype=np.float32)
-            self.speed = 65.0
-            self.throttle = 0.50
+        """Reposiciona a aeronave no estado inicial do cenário selecionado."""
+        self.crashed = False
+        self.crash_reason = ""
+        self.crash_timer = 0.0
 
         self.forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         self.right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        if scene_mode == 1:
+            # Cena 1: Começa pousado e totalmente parado na popa do convés do Porta-Aviões
+            self.pos = np.array([0.0, CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET, 95.0], dtype=np.float32)
+            self.speed = 0.0
+            self.throttle = 0.0
+            self.on_ground = True
+            self.gear_down = True
+            self.gear_deploy = 1.0
+            self.wing_sweep_angle = 20.0
+        else:
+            # Cena 2: Começa em voo na entrada do Cânion com trem de pouso recolhido
+            self.pos = np.array([0.0, 38.0, 360.0], dtype=np.float32)
+            self.speed = 65.0
+            self.throttle = 0.50
+            self.on_ground = False
+            self.gear_down = False
+            self.gear_deploy = 0.0
+            self.wing_sweep_angle = 44.0
+
+    def toggle_gear(self):
+        """Alterna o recolhimento/acionamento do trem de pouso."""
+        if self.on_ground:
+            print("[Trem de Pouso] Não é possível recolher o trem de pouso enquanto apoiado no convés!")
+            return
+        self.gear_down = not self.gear_down
+        estado = "BAIXANDO (DEPLOY)" if self.gear_down else "RECOLHENDO (RETRACT)"
+        print(f"[RD08] Trem de Pouso Retrátil: {estado}")
+
+    def trigger_crash(self, reason):
+        """Ativa o estado de Game Over e agenda o reset automático."""
+        if not self.crashed:
+            self.crashed = True
+            self.crash_reason = reason
+            self.crash_timer = 2.0  # Segundos até reiniciar automaticamente
+            self.speed = 0.0
+            self.throttle = 0.0
+            print(f"\n[GAME OVER] {reason} Reiniciando em 2 segundos (ou pressione 'R')...\n")
 
     def pitch(self, angle_rad):
         """Arfagem: rotaciona Forward e Up em torno do eixo Right."""
@@ -118,40 +199,175 @@ class Aircraft:
         self.forward = normalize(rodrigues_rotation(self.forward, self.up, angle_rad))
         self.right = normalize(np.cross(self.forward, self.up))
 
-    def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input):
-        """Atualiza a cinemática de voo e as partes móveis do F-14."""
-        # Atualiza potência (throttle) e velocidade linear
-        self.throttle = np.clip(self.throttle + throttle_input * 0.45 * dt, 0.0, 1.0)
-        target_speed = self.min_speed + self.throttle * (self.max_speed - self.min_speed)
-        self.speed += (target_speed - self.speed) * min(1.0, 3.0 * dt)
+    def is_within_carrier_deck_xz(self, pos=None):
+        """Verifica se a coordenada (X, Z) está sobre a área útil da pista do porta-aviões."""
+        p = self.pos if pos is None else pos
+        return (abs(p[0]) <= CARRIER_DECK_HALF_W) and (abs(p[2]) <= CARRIER_DECK_HALF_L)
 
-        # Taxas angulares em radianos/s
-        pitch_rate = 1.45
-        roll_rate = 2.60
-        yaw_rate = 0.85
+    def check_collisions(self, prev_pos, scene_mode):
+        """
+        Verifica todas as colisões físicas do caça com o Porta-Aviões, Oceano e Cânion.
+        """
+        if self.crashed:
+            return
 
-        if abs(pitch_input) > 1e-4:
-            self.pitch(pitch_input * pitch_rate * dt)
-        if abs(roll_input) > 1e-4:
-            self.roll(roll_input * roll_rate * dt)
-        if abs(yaw_input) > 1e-4:
-            self.yaw(yaw_input * yaw_rate * dt)
+        if scene_mode == 1:
+            # 1. Colisão com a Ilha de Comando (Superestrutura a estibordo do Porta-Aviões)
+            # Ilha centrada em (16.5, 17.5, -15.0) com dimensões (7.0, 15.0, 28.0) + mastro
+            if (11.5 <= self.pos[0] <= 21.5) and (-30.5 <= self.pos[2] <= 0.5) and (self.pos[1] <= 30.0):
+                self.trigger_crash("COLISÃO COM A TORRE DE COMANDO DO PORTA-AVIÕES!")
+                return
 
-        # Deslocamento por translação no vetor Frente (RD08)
-        self.pos += self.forward * self.speed * dt
+            # 2. Interação e Colisão com o Convés / Casco do Porta-Aviões
+            deck_contact_y = CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET
+            if self.is_within_carrier_deck_xz():
+                # Se estava acima do convés e desceu até a altura de toque
+                if not self.on_ground and self.pos[1] <= deck_contact_y and prev_pos[1] >= CARRIER_DECK_Y - 1.0:
+                    # Condições de pouso seguro:
+                    # - Trem de pouso baixado (gear_deploy > 0.75)
+                    # - Taxa de descida suave (forward[1] > -0.42)
+                    # - Asas niveladas (up[1] > 0.72)
+                    if self.gear_deploy > 0.75 and self.forward[1] > -0.42 and self.up[1] > 0.72:
+                        self.pos[1] = deck_contact_y
+                        self.on_ground = True
+                        # Nivela o vetor de voo paralelamente ao convés
+                        self.forward[1] = 0.0
+                        self.forward = normalize(self.forward)
+                        self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+                        self.right = normalize(np.cross(self.forward, self.up))
+                        print("[Pouso] Toque suave no convés! Reduza o throttle ('S') para frear.")
+                    elif self.gear_deploy <= 0.75:
+                        self.pos[1] = CARRIER_DECK_Y + 0.4
+                        self.trigger_crash("IMPACTO NO CONVÉS SEM O TREM DE POUSO BAIXADO!")
+                        return
+                    else:
+                        self.pos[1] = CARRIER_DECK_Y + 0.5
+                        self.trigger_crash("POUSO MUITO VIOLENTO OU DESNIVELADO NO CONVÉS!")
+                        return
 
-        # Proteção simples de colisão com o piso/oceano
-        if self.pos[1] < 2.5:
-            self.pos[1] = 2.5
-            if self.forward[1] < 0:
-                self.forward[1] = 0.0
-                self.forward = normalize(self.forward)
-                self.right = normalize(np.cross(self.forward, np.array([0.0, 1.0, 0.0])))
-                self.up = normalize(np.cross(self.right, self.forward))
+                # Colisão frontal/lateral com o casco do navio abaixo do nível da pista
+                elif not self.on_ground and self.pos[1] < CARRIER_DECK_Y:
+                    self.trigger_crash("COLISÃO COM O CASCO DO PORTA-AVIÕES!")
+                    return
 
-        # Enflecamento automático das asas do F-14 (20° em baixa vel -> 68° em alta vel)
+            # 3. Colisão com a Água (Oceano em Y = 0.0)
+            if self.pos[1] <= 1.25:
+                self.pos[1] = 0.8
+                self.trigger_crash("COLISÃO COM O OCEANO!")
+                return
+
+        elif scene_mode == 2:
+            # 1. Colisão com o Bunker Alvo no final do cânion (z = -1150)
+            target_z = -1150.0
+            target_x = 55.0 * math.sin(target_z * 0.0045) + 25.0 * math.cos(target_z * 0.011)
+            if (abs(self.pos[0] - target_x) <= 12.5) and (abs(self.pos[2] - target_z) <= 12.5) and (self.pos[1] <= 15.5):
+                self.trigger_crash("IMPACTO DIRETO COM O BUNKER ALVO!")
+                return
+
+            # 2. Colisão com o solo e paredões rochosos do Cânion Procedural
+            # Testa o centro da fuselagem e as extremidades das asas esquerda/direita
+            wing_span_check = 4.8
+            sample_points = [
+                self.pos,
+                self.pos + self.right * wing_span_check,
+                self.pos - self.right * wing_span_check,
+                self.pos + self.forward * 5.0
+            ]
+            for pt in sample_points:
+                ground_y = canyon_height_func(float(pt[0]), float(pt[2]))
+                if pt[1] <= ground_y + 1.35:
+                    self.trigger_crash("COLISÃO COM AS ROCHAS DO CÂNION!")
+                    return
+
+    def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):
+        """Atualiza a cinemática de solo/voo, trem de pouso e colisões."""
+        # Se bateu, apenas conta o cronômetro regressivo para reiniciar
+        if self.crashed:
+            self.crash_timer -= dt
+            if self.crash_timer <= 0.0:
+                self.reset(scene_mode)
+            return
+
+        prev_pos = self.pos.copy()
+
+        # Atualiza animação suave do trem de pouso retrátil (RD08)
+        target_gear = 1.0 if self.gear_down else 0.0
+        self.gear_deploy += (target_gear - self.gear_deploy) * min(1.0, 4.5 * dt)
+
+        # Atualiza potência (throttle) entre 0.0 e 1.0
+        self.throttle = np.clip(self.throttle + throttle_input * 0.50 * dt, 0.0, 1.0)
+
+        # ======================================================================
+        # MODO SOLO / PISTA DO PORTA-AVIÕES (Permite ficar parado com throttle 0)
+        # ======================================================================
+        if self.on_ground:
+            self.gear_down = True
+            self.gear_deploy = 1.0
+
+            # Velocidade alvo no solo: 0.0 se throttle == 0, até max_speed
+            target_speed = self.throttle * self.max_speed
+            if self.throttle < 1e-3:
+                # Desaceleração natural por atrito ou freio ativo ('S')
+                decel_rate = 38.0 if brake_active else 14.0
+                self.speed = max(0.0, self.speed - decel_rate * dt)
+            else:
+                accel_rate = 2.2 * dt
+                self.speed += (target_speed - self.speed) * min(1.0, accel_rate)
+
+            # Direção (Steering da roda de nariz) com 'A' e 'D' quando em movimento no chão
+            if self.speed > 0.5 and abs(yaw_input) > 1e-4:
+                steer_rate = 0.75 * min(1.0, self.speed / 25.0)
+                self.yaw(yaw_input * steer_rate * dt)
+
+            # Deslocamento horizontal sobre o convés
+            self.pos += self.forward * self.speed * dt
+            self.pos[1] = CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET
+
+            # Decolagem (Rotation): se atingiu velocidade mínima de voo e puxou o manche (pitch_input > 0)
+            if self.speed >= self.min_flight_speed and pitch_input > 0.1:
+                self.on_ground = False
+                self.pitch(0.12)  # Eleva o nariz suavemente para sair do convés
+                self.pos[1] += 0.25
+                print("[Voo] Decolagem realizada! Pressione 'E' para recolher o trem de pouso.")
+
+            # Verifica se saiu dos limites da pista do porta-aviões
+            elif not self.is_within_carrier_deck_xz():
+                self.on_ground = False
+                if self.speed < self.min_flight_speed:
+                    print("[Alerta] Saiu do convés sem velocidade de sustentação!")
+
+        # ======================================================================
+        # MODO EM VOO (6-DOF Livre sem Gimbal Lock)
+        # ======================================================================
+        else:
+            # Em voo, mesmo com throttle 0 a aeronave mantém uma velocidade mínima de planeio
+            # mas se estiver muito lenta sofre perda de altitude (stall/gravidade)
+            target_speed = 18.0 + self.throttle * (self.max_speed - 18.0)
+            self.speed += (target_speed - self.speed) * min(1.0, 2.5 * dt)
+
+            pitch_rate = 1.45
+            roll_rate = 2.60
+            yaw_rate = 0.85
+
+            if abs(pitch_input) > 1e-4:
+                self.pitch(pitch_input * pitch_rate * dt)
+            if abs(roll_input) > 1e-4:
+                self.roll(roll_input * roll_rate * dt)
+            if abs(yaw_input) > 1e-4:
+                self.yaw(yaw_input * yaw_rate * dt)
+
+            # Deslocamento no vetor Frente
+            self.pos += self.forward * self.speed * dt
+
+            # Efeito de perda de sustentação (Stall) se a velocidade em voo cair abaixo do mínimo
+            if self.speed < self.min_flight_speed:
+                sink_rate = (self.min_flight_speed - self.speed) * 0.85
+                self.pos[1] -= sink_rate * dt
+
+        # Enflecamento automático das asas do F-14 (20° aberta -> 68° fechada em alta velocidade)
         if self.auto_wing_sweep:
-            target_sweep = 20.0 + 48.0 * self.throttle
+            speed_ratio = np.clip((self.speed - 30.0) / (self.max_speed - 30.0), 0.0, 1.0)
+            target_sweep = 20.0 + 48.0 * speed_ratio
             self.wing_sweep_angle += (target_sweep - self.wing_sweep_angle) * min(1.0, 5.0 * dt)
 
         # Deflexão visual das superfícies de controle (profundores e lemes)
@@ -159,10 +375,12 @@ class Aircraft:
         self.elevator_roll = roll_input * 15.0
         self.rudder_yaw = yaw_input * 20.0
 
+        # Checa colisões com o porta-aviões, água ou rochas do cânion
+        self.check_collisions(prev_pos, scene_mode)
+
     def get_model_matrix(self):
         """
         Constrói a matriz 4x4 homogênea (column-major para OpenGL) a partir da base (R, U, -F, P).
-        No modelo local do F-14, o nariz aponta para -Z, topo para +Y e asa direita para +X.
         """
         neg_f = -self.forward
         m = np.array([
@@ -175,7 +393,7 @@ class Aircraft:
 
 
 # ==============================================================================
-# 2. GERAÇÃO PROCEDURAL DE TEXTURAS UV (RD05)
+# 3. GERAÇÃO PROCEDURAL DE TEXTURAS UV (RD05)
 # ==============================================================================
 
 def create_ocean_texture():
@@ -192,7 +410,6 @@ def create_ocean_texture():
             r = np.clip(12 + wave * 0.4, 5, 45)
             g = np.clip(65 + wave * 0.9, 40, 110)
             b = np.clip(135 + wave * 1.4, 95, 190)
-            # Linhas de grade sutis para reforçar a percepção de velocidade
             if x % 32 == 0 or y % 32 == 0:
                 r, g, b = min(255, r + 20), min(255, g + 30), min(255, b + 35)
             img[y, x] = [int(r), int(g), int(b)]
@@ -217,13 +434,10 @@ def create_deck_texture():
 
     for y in range(size):
         for x in range(size):
-            # Bordas da pista brancas/amarelas
             if abs(x - 24) < 4 or abs(x - (size - 24)) < 4:
                 img[y, x] = [230, 210, 60]
-            # Faixa central tracejada branca
             if abs(x - size // 2) < 4 and (y // 16) % 2 == 0:
                 img[y, x] = [235, 235, 235]
-            # Trilho da catapulta de lançamento
             if abs(x - size // 2 + 28) < 2:
                 img[y, x] = [120, 125, 130]
 
@@ -266,10 +480,8 @@ def create_wing_insignia_texture():
     img = np.full((size, size, 3), 175, dtype=np.uint8)
     for y in range(size):
         for x in range(size):
-            # Linhas de painéis metálicos da aeronave
             if x % 32 == 0 or y % 32 == 0:
                 img[y, x] = [130, 135, 142]
-            # Faixa de esquadrão naval na ponta
             if 85 < x < 110:
                 img[y, x] = [35, 45, 70]
             elif 110 <= x < 116:
@@ -286,7 +498,7 @@ def create_wing_insignia_texture():
 
 
 # ==============================================================================
-# 3. PRIMITIVAS E MODELAGEM LOW-POLY DO F-14 TOMCAT (RD02, RD03, RD08)
+# 4. PRIMITIVAS, MODELAGEM DO F-14 E TREM DE POUSO RETRÁTIL (RD02, RD03, RD08)
 # ==============================================================================
 
 def draw_quad_with_normal(p1, p2, p3, p4, uv_scale=1.0):
@@ -319,74 +531,162 @@ def draw_box(dx, dy, dz, uv_scale=1.0):
     """Desenha um paralelepípedo centrado na origem com dimensões (dx, dy, dz)."""
     hx, hy, hz = dx * 0.5, dy * 0.5, dz * 0.5
     glBegin(GL_QUADS)
-    # Topo (+Y)
     draw_quad_with_normal([-hx, hy, -hz], [-hx, hy, hz], [hx, hy, hz], [hx, hy, -hz], uv_scale)
-    # Base (-Y)
     draw_quad_with_normal([-hx, -hy, hz], [-hx, -hy, -hz], [hx, -hy, -hz], [hx, -hy, hz], uv_scale)
-    # Frente (-Z)
     draw_quad_with_normal([hx, -hy, -hz], [-hx, -hy, -hz], [-hx, hy, -hz], [hx, hy, -hz], uv_scale)
-    # Trás (+Z)
     draw_quad_with_normal([-hx, -hy, hz], [hx, -hy, hz], [hx, hy, hz], [-hx, hy, hz], uv_scale)
-    # Direita (+X)
     draw_quad_with_normal([hx, -hy, hz], [hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], uv_scale)
-    # Esquerda (-X)
     draw_quad_with_normal([-hx, -hy, -hz], [-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz], uv_scale)
     glEnd()
 
 
-def build_f14_static_fuselage_list(wing_tex_id, is_wingman=False):
+def draw_wheel(radius=0.26, width=0.14, segments=12):
+    """Desenha uma roda cilíndrica low-poly ao longo do eixo X (pneu preto + calota cinza)."""
+    half_w = width * 0.5
+    # Banda de rodagem do pneu
+    glColor3f(0.12, 0.12, 0.14)
+    glBegin(GL_QUAD_STRIP)
+    for i in range(segments + 1):
+        ang = (2.0 * math.pi * i) / segments
+        ny = math.cos(ang)
+        nz = math.sin(ang)
+        glNormal3f(0.0, ny, nz)
+        glVertex3f(-half_w, radius * ny, radius * nz)
+        glVertex3f( half_w, radius * ny, radius * nz)
+    glEnd()
+
+    # Calotas laterais
+    for side in (-1.0, 1.0):
+        glColor3f(0.75, 0.77, 0.80)
+        glBegin(GL_TRIANGLE_FAN)
+        glNormal3f(side, 0.0, 0.0)
+        glVertex3f(side * half_w, 0.0, 0.0)
+        for i in range(segments + 1):
+            ang = (2.0 * math.pi * i) / segments
+            y = radius * 0.65 * math.cos(ang)
+            z = radius * 0.65 * math.sin(ang)
+            glVertex3f(side * (half_w + 0.005), y, z)
+        glEnd()
+
+
+def draw_retractable_landing_gear(gear_deploy, rudder_yaw):
+    """
+    Renderiza o Trem de Pouso Retrátil do F-14 Tomcat usando hierarquia de matrizes (RD08).
+    gear_deploy varia continuamente de 1.0 (baixado) a 0.0 (recolhido).
+    """
+    if gear_deploy < 0.02:
+        return
+
+    glPushAttrib(GL_TEXTURE_BIT)
+    glDisable(GL_TEXTURE_2D)
+
+    retract_angle = (1.0 - gear_deploy) * 90.0
+
+    # 1. TREM DE POUSO DE NARIZ (Nose Gear: z = -4.1, recolhe dobrando para trás)
+    glPushMatrix()
+    glTranslatef(0.0, -0.32, -4.1)
+    glRotatef(retract_angle, 1.0, 0.0, 0.0)
+
+    # Porta da baia do trem dianteiro
+    glColor3f(0.68, 0.70, 0.74)
+    glPushMatrix()
+    glTranslatef(-0.22, -0.25, 0.0)
+    draw_box(0.04, 0.45, 0.70)
+    glPopMatrix()
+
+    # Haste principal (oleo strut)
+    glColor3f(0.85, 0.87, 0.90)
+    glPushMatrix()
+    glTranslatef(0.0, -0.45, 0.0)
+    draw_box(0.10, 0.90, 0.10)
+
+    # Roda dupla dianteira (gira com o comando de leme/steering 'A' e 'D')
+    glTranslatef(0.0, -0.45, 0.0)
+    glRotatef(rudder_yaw, 0.0, 1.0, 0.0)
+    glPushMatrix()
+    glTranslatef(-0.10, 0.0, 0.0)
+    draw_wheel(radius=0.22, width=0.10)
+    glPopMatrix()
+    glPushMatrix()
+    glTranslatef(0.10, 0.0, 0.0)
+    draw_wheel(radius=0.22, width=0.10)
+    glPopMatrix()
+
+    glPopMatrix()
+    glPopMatrix()
+
+    # 2. TRENS DE POUSO PRINCIPAIS (Main Gears: x = +-1.15, z = 0.85, recolhem para dentro)
+    for side in (-1.0, 1.0):
+        glPushMatrix()
+        glTranslatef(side * 1.15, -0.35, 0.85)
+        # Rotaciona lateralmente para o interior da fuselagem ao recolher
+        glRotatef(side * retract_angle, 0.0, 0.0, 1.0)
+
+        # Porta externa da baia do trem principal
+        glColor3f(0.65, 0.68, 0.72)
+        glPushMatrix()
+        glTranslatef(side * 0.18, -0.30, 0.0)
+        draw_box(0.04, 0.55, 0.85)
+        glPopMatrix()
+
+        # Haste principal (Main Strut)
+        glColor3f(0.82, 0.84, 0.88)
+        glPushMatrix()
+        glTranslatef(0.0, -0.42, 0.0)
+        draw_box(0.14, 0.84, 0.14)
+
+        # Roda principal de alta carga
+        glTranslatef(0.0, -0.42, 0.0)
+        draw_wheel(radius=0.30, width=0.18)
+        glPopMatrix()
+
+        glPopMatrix()
+
+    glPopAttrib()
+
+
+def build_f14_static_fuselage_list(wing_tex_id):
     """
     Compila em uma Display List a fuselagem estática do F-14 Tomcat usando
     seções transversais (Cross-Sections), naceles duplas e canopy.
-    O nariz aponta para -Z (z = -6.8) e os bocais ficam em +Z (z = +5.3).
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
 
-    # Materiais especulares metálicos para o caça (RD06)
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.75, 0.75, 0.80, 1.0])
     glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64.0)
 
     # 1. RADOME E FUSELAGEM CENTRAL ("PANCAKE") POR SEÇÕES TRANSVERSAIS
-    # Cada seção é definida por (z, half_width_bottom, half_width_top, y_bottom, y_top)
     sections = [
-        (-6.8, 0.02, 0.02, -0.10, -0.05),  # Ponta do nariz (Pitot/Radome)
-        (-5.2, 0.38, 0.30, -0.28,  0.22),  # Base do radome preto
-        (-3.2, 0.58, 0.45, -0.35,  0.38),  # Seção do Cockpit frontal
-        (-1.2, 0.85, 0.72, -0.36,  0.42),  # Cockpit traseiro (RIO) + Glove
-        ( 1.5, 1.55, 1.35, -0.32,  0.32),  # Seção central larga ("Pancake")
-        ( 4.5, 1.25, 1.05, -0.25,  0.25),  # Traseira entre os motores
-        ( 5.3, 0.90, 0.80, -0.15,  0.18),  # Fechamento traseiro (Beavertail)
+        (-6.8, 0.02, 0.02, -0.10, -0.05),
+        (-5.2, 0.38, 0.30, -0.28,  0.22),
+        (-3.2, 0.58, 0.45, -0.35,  0.38),
+        (-1.2, 0.85, 0.72, -0.36,  0.42),
+        ( 1.5, 1.55, 1.35, -0.32,  0.32),
+        ( 4.5, 1.25, 1.05, -0.25,  0.25),
+        ( 5.3, 0.90, 0.80, -0.15,  0.18),
     ]
 
     for i in range(len(sections) - 1):
         z1, wb1, wt1, yb1, yt1 = sections[i]
         z2, wb2, wt2, yb2, yt2 = sections[i + 1]
 
-        # Cor diferenciada para o bico do radar (preto/antracite) vs fuselagem cinza naval
         if i == 0:
             glColor3f(0.18, 0.19, 0.22)
-        elif i == 2 and is_wingman:
-            glColor3f(0.25, 0.40, 0.68)  # Pintura azul "Iceman" no nariz do Wingman
         elif i == 2:
-            glColor3f(0.65, 0.22, 0.20)  # Pintura vermelha "Maverick" anti-glare
+            glColor3f(0.65, 0.22, 0.20)  # Pintura vermelha anti-glare "Maverick"
         else:
             glColor3f(0.72, 0.75, 0.79)
 
-        # Vértices das duas seções (sentido anti-horário)
         tl1, tr1 = [-wt1, yt1, z1], [wt1, yt1, z1]
         bl1, br1 = [-wb1, yb1, z1], [wb1, yb1, z1]
         tl2, tr2 = [-wt2, yt2, z2], [wt2, yt2, z2]
         bl2, br2 = [-wb2, yb2, z2], [wb2, yb2, z2]
 
         glBegin(GL_QUADS)
-        # Topo
         draw_quad_with_normal(tl1, tl2, tr2, tr1)
-        # Base
         draw_quad_with_normal(br1, br2, bl2, bl1)
-        # Lateral Direita
         draw_quad_with_normal(tr1, tr2, br2, br1)
-        # Lateral Esquerda
         draw_quad_with_normal(bl1, bl2, tl2, tl1)
         glEnd()
 
@@ -403,29 +703,22 @@ def build_f14_static_fuselage_list(wing_tex_id, is_wingman=False):
         z2, w2, y2 = canopy_sec[i + 1]
         y_base = 0.28
         glBegin(GL_QUADS)
-        # Topo do canopy
         draw_quad_with_normal([-w1 * 0.6, y1, z1], [-w2 * 0.6, y2, z2], [w2 * 0.6, y2, z2], [w1 * 0.6, y1, z1])
-        # Lateral direita do vidro
         draw_quad_with_normal([w1 * 0.6, y1, z1], [w2 * 0.6, y2, z2], [w2, y_base, z2], [w1, y_base, z1])
-        # Lateral esquerda do vidro
         draw_quad_with_normal([-w1, y_base, z1], [-w2, y_base, z2], [-w2 * 0.6, y2, z2], [-w1 * 0.6, y1, z1])
         glEnd()
 
-    # 3. NACELES DUPLAS DOS MOTORES TF30 / F110 (Entradas de ar retangulares inclinadas)
+    # 3. NACELES DUPLAS DOS MOTORES (Entradas de ar retangulares inclinadas)
     glColor3f(0.64, 0.67, 0.71)
     for side in (-1.0, 1.0):
         x_in = side * 0.42
         x_out = side * 1.15
         glBegin(GL_QUADS)
-        # Parede externa da nacele
         draw_quad_with_normal([x_out, -0.58, -1.8], [x_out, -0.52, 4.8], [x_out, 0.15, 4.8], [x_out, 0.18, -1.4])
-        # Parede interna da nacele
         draw_quad_with_normal([x_in, 0.18, -1.4], [x_in, 0.15, 4.8], [x_in, -0.52, 4.8], [x_in, -0.58, -1.8])
-        # Fundo da nacele
         draw_quad_with_normal([x_in, -0.58, -1.8], [x_in, -0.52, 4.8], [x_out, -0.52, 4.8], [x_out, -0.58, -1.8])
         glEnd()
 
-        # Boca escura da tomada de ar frontal (Intake ramp)
         glColor3f(0.12, 0.13, 0.15)
         glBegin(GL_QUADS)
         draw_quad_with_normal([x_in, -0.58, -1.8], [x_out, -0.58, -1.8], [x_out, 0.18, -1.4], [x_in, 0.18, -1.4])
@@ -448,30 +741,19 @@ def build_f14_static_fuselage_list(wing_tex_id, is_wingman=False):
             draw_tri_with_normal([p1[0], -0.05, p1[2]], [p3[0], -0.05, p3[2]], [p2[0], -0.02, p2[2]])
         glEnd()
 
-    # 5. ESTABILIZADORES VERTICAIS DUPLOS INCLINADOS (TWIN TAILS CARACTERÍSTICOS DO F-14)
+    # 5. ESTABILIZADORES VERTICAIS DUPLOS INCLINADOS (TWIN TAILS)
     for side in (-1.0, 1.0):
         glPushMatrix()
         glTranslatef(side * 0.92, 0.22, 3.6)
-        glRotatef(-side * 7.0, 0.0, 0.0, 1.0)  # Inclinação canted outward típica do Tomcat
+        glRotatef(-side * 7.0, 0.0, 0.0, 1.0)
 
-        # Cor do esquadrão nas caudas (VF-84 Jolly Rogers / Top Gun)
-        if is_wingman:
-            glColor3f(0.20, 0.35, 0.65)
-        else:
-            glColor3f(0.22, 0.24, 0.28)
-
+        glColor3f(0.22, 0.24, 0.28)
         glBegin(GL_QUADS)
-        # Face externa da deriva
         draw_quad_with_normal([0.04, 0.0, -0.8], [0.04, 0.0, 1.2], [0.02, 1.65, 1.4], [0.02, 1.65, 0.3])
-        # Face interna da deriva
         draw_quad_with_normal([-0.04, 0.0, 1.2], [-0.04, 0.0, -0.8], [-0.02, 1.65, 0.3], [-0.02, 1.65, 1.4])
         glEnd()
 
-        # Ponta amarela/laranja do esquadrão no topo do estabilizador vertical
-        if is_wingman:
-            glColor3f(0.90, 0.90, 0.95)
-        else:
-            glColor3f(0.95, 0.78, 0.15)
+        glColor3f(0.95, 0.78, 0.15)
         glBegin(GL_QUADS)
         draw_quad_with_normal([0.03, 1.45, 0.2], [0.03, 1.45, 1.35], [0.02, 1.68, 1.4], [0.02, 1.68, 0.3])
         draw_quad_with_normal([-0.03, 1.45, 1.35], [-0.03, 1.45, 0.2], [-0.02, 1.68, 0.3], [-0.02, 1.68, 1.4])
@@ -483,27 +765,19 @@ def build_f14_static_fuselage_list(wing_tex_id, is_wingman=False):
 
 
 def draw_f14_wing_panel(side, wing_tex_id):
-    """
-    Desenha uma asa móvel do F-14 a partir do seu pivô local (0, 0, 0).
-    side = +1.0 (asa direita) ou -1.0 (asa esquerda).
-    """
+    """Desenha uma asa móvel do F-14 a partir do seu pivô local (0, 0, 0)."""
     glBindTexture(GL_TEXTURE_2D, wing_tex_id)
     glColor3f(0.75, 0.77, 0.81)
     span = 4.2 * side
     glBegin(GL_QUADS)
     if side > 0:
-        # Superfície superior
         draw_quad_with_normal([0.0, 0.06, -0.65], [0.0, 0.04, 0.85], [span, 0.02, 1.35], [span, 0.03, 0.35], 1.0)
-        # Superfície inferior
         draw_quad_with_normal([0.0, -0.04, 0.85], [0.0, -0.06, -0.65], [span, -0.03, 0.35], [span, -0.02, 1.35], 1.0)
     else:
-        # Superfície superior
         draw_quad_with_normal([0.0, 0.04, 0.85], [0.0, 0.06, -0.65], [span, 0.03, 0.35], [span, 0.02, 1.35], 1.0)
-        # Superfície inferior
         draw_quad_with_normal([0.0, -0.06, -0.65], [0.0, -0.04, 0.85], [span, -0.02, 1.35], [span, -0.03, 0.35], 1.0)
     glEnd()
 
-    # Luzes de navegação nas pontas das asas (Vermelha na esquerda, Verde na direita)
     glPushAttrib(GL_LIGHTING_BIT)
     glDisable(GL_LIGHTING)
     if side > 0:
@@ -522,38 +796,38 @@ def draw_f14_complete(aircraft, fuselage_dlist, wing_tex_id, sim_time):
     Renderiza o F-14 Tomcat completo aplicando transformações hierárquicas (RD08):
       1. Matriz global 6-DOF da aeronave.
       2. Fuselagem estática (Display List).
-      3. Asas de geometria variável (Rotação nos pivôs locais).
-      4. Profundores traseiros / Tailerons (Rotação com Pitch e Roll).
-      5. Cones de Pós-Combustão (Escala dinâmica conforme o Throttle).
+      3. Trem de pouso retrátil (Rotação de recolhimento + direção da roda de nariz).
+      4. Asas de geometria variável (Rotação nos pivôs locais).
+      5. Profundores traseiros / Tailerons (Rotação com Pitch e Roll).
+      6. Cones de Pós-Combustão (Escala dinâmica conforme o Throttle).
     """
     glPushMatrix()
-    # Aplica a matriz 4x4 da base ortonormal local (Translação + Orientação 3D)
     glMultMatrixf(aircraft.get_model_matrix())
 
     # 1. Fuselagem principal, cockpit, naceles e caudas
     glCallList(fuselage_dlist)
 
-    # 2. Asas de Geometria Variável (RD08: Translação para o pivô -> Rotação -> Desenho)
-    # Asa Direita (+X)
+    # 2. Trem de Pouso Retrátil (RD08)
+    draw_retractable_landing_gear(aircraft.gear_deploy, aircraft.rudder_yaw)
+
+    # 3. Asas de Geometria Variável (RD08)
     glPushMatrix()
     glTranslatef(1.65, 0.06, 0.15)
     glRotatef(-aircraft.wing_sweep_angle, 0.0, 1.0, 0.0)
     draw_f14_wing_panel(1.0, wing_tex_id)
     glPopMatrix()
 
-    # Asa Esquerda (-X)
     glPushMatrix()
     glTranslatef(-1.65, 0.06, 0.15)
     glRotatef(aircraft.wing_sweep_angle, 0.0, 1.0, 0.0)
     draw_f14_wing_panel(-1.0, wing_tex_id)
     glPopMatrix()
 
-    # 3. Profundores Horizontais Móveis (Tailerons) - RD08
+    # 4. Profundores Horizontais Móveis (Tailerons) - RD08
     glColor3f(0.58, 0.60, 0.65)
     for side in (-1.0, 1.0):
         glPushMatrix()
         glTranslatef(side * 1.15, -0.08, 4.4)
-        # Combina arfagem (pitch) e rolagem diferencial (tailerons)
         deflection = aircraft.elevator_pitch + side * aircraft.elevator_roll
         glRotatef(deflection, 1.0, 0.0, 0.0)
         glBegin(GL_QUADS)
@@ -567,62 +841,60 @@ def draw_f14_complete(aircraft, fuselage_dlist, wing_tex_id, sim_time):
         glEnd()
         glPopMatrix()
 
-    # 4. Bocais das Turbinas e Pós-Combustão (Afterburners com glScalef - RD08)
+    # 5. Bocais das Turbinas e Pós-Combustão (Afterburners com glScalef - RD08)
     pulse = 1.0 + 0.12 * math.sin(sim_time * 38.0)
-    flame_scale_z = (0.3 + 2.4 * aircraft.throttle) * pulse
-    flame_scale_xy = 0.75 + 0.35 * aircraft.throttle
+    flame_scale_z = (0.05 + 2.6 * aircraft.throttle) * pulse
+    flame_scale_xy = 0.65 + 0.45 * aircraft.throttle
 
     for side in (-1.0, 1.0):
-        # Anel metálico externo do bocal (Nozzle)
         glColor3f(0.22, 0.23, 0.26)
         glPushMatrix()
         glTranslatef(side * 0.78, -0.18, 4.85)
         draw_box(0.55, 0.55, 0.65)
 
-        # Cone de fogo do Afterburner (Desativa iluminação para brilho próprio emissivo)
-        glPushAttrib(GL_LIGHTING_BIT | GL_TEXTURE_BIT)
-        glDisable(GL_LIGHTING)
-        glDisable(GL_TEXTURE_2D)
+        # Só desenha chama do pós-combustor se throttle > 0.02
+        if aircraft.throttle > 0.02 and not aircraft.crashed:
+            glPushAttrib(GL_LIGHTING_BIT | GL_TEXTURE_BIT)
+            glDisable(GL_LIGHTING)
+            glDisable(GL_TEXTURE_2D)
 
-        glPushMatrix()
-        glTranslatef(0.0, 0.0, 0.32)
-        glScalef(flame_scale_xy, flame_scale_xy, flame_scale_z)
+            glPushMatrix()
+            glTranslatef(0.0, 0.0, 0.32)
+            glScalef(flame_scale_xy, flame_scale_xy, flame_scale_z)
 
-        # Chama externa laranja/dourada
-        glColor3f(1.0, 0.55 + 0.3 * aircraft.throttle, 0.12)
-        glBegin(GL_TRIANGLES)
-        r = 0.24
-        tip = [0.0, 0.0, 1.4]
-        pts = [[-r, -r, 0.0], [r, -r, 0.0], [r, r, 0.0], [-r, r, 0.0]]
-        for i in range(4):
-            p_a = pts[i]
-            p_b = pts[(i + 1) % 4]
-            glVertex3fv(p_a)
-            glVertex3fv(p_b)
-            glVertex3fv(tip)
-        glEnd()
+            glColor3f(1.0, 0.55 + 0.3 * aircraft.throttle, 0.12)
+            glBegin(GL_TRIANGLES)
+            r = 0.24
+            tip = [0.0, 0.0, 1.4]
+            pts = [[-r, -r, 0.0], [r, -r, 0.0], [r, r, 0.0], [-r, r, 0.0]]
+            for i in range(4):
+                p_a = pts[i]
+                p_b = pts[(i + 1) % 4]
+                glVertex3fv(p_a)
+                glVertex3fv(p_b)
+                glVertex3fv(tip)
+            glEnd()
 
-        # Núcleo interno azulado/branco de alta temperatura
-        glColor3f(0.75, 0.90, 1.0)
-        glScalef(0.55, 0.55, 0.65)
-        glBegin(GL_TRIANGLES)
-        for i in range(4):
-            p_a = pts[i]
-            p_b = pts[(i + 1) % 4]
-            glVertex3fv(p_a)
-            glVertex3fv(p_b)
-            glVertex3fv(tip)
-        glEnd()
+            glColor3f(0.75, 0.90, 1.0)
+            glScalef(0.55, 0.55, 0.65)
+            glBegin(GL_TRIANGLES)
+            for i in range(4):
+                p_a = pts[i]
+                p_b = pts[(i + 1) % 4]
+                glVertex3fv(p_a)
+                glVertex3fv(p_b)
+                glVertex3fv(tip)
+            glEnd()
 
-        glPopMatrix()
-        glPopAttrib()
+            glPopMatrix()
+            glPopAttrib()
         glPopMatrix()
 
     glPopMatrix()
 
 
 # ==============================================================================
-# 4. CONSTRUÇÃO DOS DOIS CENÁRIOS: PORTA-AVIÕES E CÂNION PROCEDURAL
+# 5. CONSTRUÇÃO DOS DOIS CENÁRIOS: PORTA-AVIÕES E CÂNION PROCEDURAL
 # ==============================================================================
 
 def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
@@ -671,9 +943,9 @@ def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
     glEnable(GL_TEXTURE_2D)
     glBindTexture(GL_TEXTURE_2D, deck_tex_id)
     glColor3f(0.95, 0.95, 0.95)
-    deck_w = 24.0
-    deck_l = 115.0
-    deck_y = 10.15
+    deck_w = CARRIER_DECK_HALF_W
+    deck_l = CARRIER_DECK_HALF_L
+    deck_y = CARRIER_DECK_Y
     glBegin(GL_QUADS)
     glNormal3f(0.0, 1.0, 0.0)
     glTexCoord2f(0.0, 0.0)
@@ -693,13 +965,12 @@ def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
     glTranslatef(16.5, 17.5, -15.0)
     draw_box(7.0, 15.0, 28.0)
 
-    # Mastro do Radar e Ponte de Comando no topo da Ilha
     glColor3f(0.20, 0.22, 0.25)
     glTranslatef(0.0, 11.0, 0.0)
     draw_box(2.2, 8.0, 4.0)
     glPopMatrix()
 
-    # 5. Boias luminosas de aproximação na popa do porta-aviões (Guia visual de pouso)
+    # 5. Boias luminosas de aproximação na popa do porta-aviões
     glPushAttrib(GL_LIGHTING_BIT)
     glDisable(GL_LIGHTING)
     for i in range(1, 7):
@@ -717,30 +988,6 @@ def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
 
     glEndList()
     return dlist
-
-
-def canyon_height_func(x, z):
-    """
-    Função matemática f(x, z) que esculpe um corredor sinuoso ("Trench Run")
-    com fundo plano navegável e paredões rochosos escarpados nas laterais.
-    """
-    # Centro sinuoso do cânion ao longo de Z
-    center_x = 55.0 * math.sin(z * 0.0045) + 25.0 * math.cos(z * 0.011)
-    dist = abs(x - center_x)
-
-    # Largura do corredor central = 42 metros de cada lado
-    canyon_wall = max(0.0, dist - 42.0)
-    wall_height = min(165.0, (canyon_wall ** 1.35) * 0.65)
-
-    # Rugosidade das montanhas usando ondas trigonométricas compostas
-    roughness = (
-        14.0 * math.sin(x * 0.045) * math.cos(z * 0.045)
-        + 7.0 * math.sin(x * 0.11 + z * 0.09)
-    )
-    if dist < 42.0:
-        # Leito do rio/cânion quase plano
-        return 2.0 + 1.2 * math.sin(x * 0.08) * math.cos(z * 0.08)
-    return max(2.0, wall_height + roughness)
 
 
 def build_scene2_canyon_list(canyon_tex_id):
@@ -761,13 +1008,11 @@ def build_scene2_canyon_list(canyon_tex_id):
     xs = np.arange(x_min, x_max + dx, dx)
     zs = np.arange(z_min, z_max + dz, dz)
 
-    # Pré-calcula a malha de alturas Y(x, z)
     heights = np.zeros((len(xs), len(zs)), dtype=np.float32)
     for i, x in enumerate(xs):
         for j, z in enumerate(zs):
             heights[i, j] = canyon_height_func(x, z)
 
-    # Renderiza a malha de triângulos com coordenadas de textura UV e cores por altitude (RD03, RD05, RD06)
     glBegin(GL_TRIANGLES)
     for i in range(len(xs) - 1):
         for j in range(len(zs) - 1):
@@ -783,23 +1028,18 @@ def build_scene2_canyon_list(canyon_tex_id):
 
             avg_y = 0.25 * (y00 + y10 + y01 + y11)
             if avg_y < 6.0:
-                # Leito do cânion mais escuro/úmido
                 glColor3f(0.45, 0.42, 0.38)
             elif avg_y < 85.0:
-                # Paredões de arenito avermelhado
                 glColor3f(0.88, 0.68, 0.52)
             else:
-                # Topo das montanhas mais claro
                 glColor3f(0.95, 0.85, 0.75)
 
-            # Triângulo 1
             n1 = compute_normal(p00, p01, p11)
             glNormal3fv(n1)
             glTexCoord2f(0.0, 0.0); glVertex3fv(p00)
             glTexCoord2f(0.0, 1.0); glVertex3fv(p01)
             glTexCoord2f(1.0, 1.0); glVertex3fv(p11)
 
-            # Triângulo 2
             n2 = compute_normal(p00, p11, p10)
             glNormal3fv(n2)
             glTexCoord2f(0.0, 0.0); glVertex3fv(p00)
@@ -807,7 +1047,6 @@ def build_scene2_canyon_list(canyon_tex_id):
             glTexCoord2f(1.0, 0.0); glVertex3fv(p10)
     glEnd()
 
-    # Alvo da Missão ("Bunker Nuclear") no final do Cânion (z = -1150)
     target_z = -1150.0
     target_x = 55.0 * math.sin(target_z * 0.0045) + 25.0 * math.cos(target_z * 0.011)
     glDisable(GL_TEXTURE_2D)
@@ -816,7 +1055,6 @@ def build_scene2_canyon_list(canyon_tex_id):
     glColor3f(0.35, 0.38, 0.40)
     draw_box(22.0, 12.0, 22.0)
 
-    # Marcação vermelha brilhante no centro do alvo
     glPushAttrib(GL_LIGHTING_BIT)
     glDisable(GL_LIGHTING)
     glColor3f(1.0, 0.15, 0.15)
@@ -830,7 +1068,7 @@ def build_scene2_canyon_list(canyon_tex_id):
 
 
 # ==============================================================================
-# 5. HUD DO COCKPIT E SISTEMA DE CÂMERAS (RD07)
+# 6. HUD DO COCKPIT E OVERLAY DE COLISÃO / GAME OVER (RD07)
 # ==============================================================================
 
 def draw_cockpit_hud(width, height, aircraft):
@@ -856,7 +1094,7 @@ def draw_cockpit_hud(width, height, aircraft):
     glColor3f(0.15, 1.0, 0.25)
     glLineWidth(2.0)
 
-    # Retículo central de mira (Crosshair do F-14)
+    # Retículo central de mira
     glBegin(GL_LINES)
     glVertex2f(cx - 25, cy); glVertex2f(cx - 8, cy)
     glVertex2f(cx + 8, cy);  glVertex2f(cx + 25, cy)
@@ -864,7 +1102,7 @@ def draw_cockpit_hud(width, height, aircraft):
     glVertex2f(cx, cy + 8);  glVertex2f(cx, cy + 25)
     glEnd()
 
-    # Horizonte Artificial (Pitch Ladder) que inclina conforme o Roll e Pitch do caça
+    # Horizonte Artificial
     roll_angle = math.degrees(math.atan2(aircraft.right[1], aircraft.up[1]))
     pitch_angle = math.degrees(math.asin(np.clip(aircraft.forward[1], -1.0, 1.0)))
 
@@ -874,10 +1112,8 @@ def draw_cockpit_hud(width, height, aircraft):
     glTranslatef(0.0, -pitch_angle * 4.5, 0.0)
 
     glBegin(GL_LINES)
-    # Linha do horizonte principal
     glVertex2f(-120, 0); glVertex2f(-35, 0)
     glVertex2f(35, 0);   glVertex2f(120, 0)
-    # Escadas de arfagem (+/- 10, 20, 30 graus)
     for deg in (-30, -20, -10, 10, 20, 30):
         y_off = deg * 4.5
         glVertex2f(-55, y_off); glVertex2f(-25, y_off)
@@ -901,6 +1137,60 @@ def draw_cockpit_hud(width, height, aircraft):
     glVertex2f(cx - 238, cy - 98 + fill_h)
     glEnd()
 
+    # Indicador luminoso de Trem de Pouso no HUD (Verde abaixo da mira quando baixado)
+    if aircraft.gear_deploy > 0.5:
+        glColor3f(0.2, 1.0, 0.2)
+        glBegin(GL_TRIANGLES)
+        glVertex2f(cx - 12, cy - 125)
+        glVertex2f(cx + 12, cy - 125)
+        glVertex2f(cx, cy - 145)
+        glEnd()
+
+    glPopAttrib()
+    glPopMatrix()
+    glMatrixMode(GL_PROJECTION)
+    glPopMatrix()
+    glMatrixMode(GL_MODELVIEW)
+
+
+def draw_crash_overlay(width, height):
+    """
+    Desenha um alerta visual vermelho semitransparente na tela quando ocorre Game Over/Colisão.
+    """
+    glMatrixMode(GL_PROJECTION)
+    glPushMatrix()
+    glLoadIdentity()
+    gluOrtho2D(0, width, 0, height)
+
+    glMatrixMode(GL_MODELVIEW)
+    glPushMatrix()
+    glLoadIdentity()
+
+    glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_LINE_BIT)
+    glDisable(GL_DEPTH_TEST)
+    glDisable(GL_LIGHTING)
+    glDisable(GL_TEXTURE_2D)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+    # Filtro vermelho translúcido sobre toda a tela
+    glColor4f(0.85, 0.10, 0.08, 0.42)
+    glBegin(GL_QUADS)
+    glVertex2f(0, 0)
+    glVertex2f(width, 0)
+    glVertex2f(width, height)
+    glVertex2f(0, height)
+    glEnd()
+
+    # Grande 'X' vermelho de impacto no centro da tela
+    cx, cy = width * 0.5, height * 0.5
+    glColor4f(1.0, 0.2, 0.15, 0.95)
+    glLineWidth(5.0)
+    glBegin(GL_LINES)
+    glVertex2f(cx - 80, cy - 80); glVertex2f(cx + 80, cy + 80)
+    glVertex2f(cx - 80, cy + 80); glVertex2f(cx + 80, cy - 80)
+    glEnd()
+
     glPopAttrib()
     glPopMatrix()
     glMatrixMode(GL_PROJECTION)
@@ -909,7 +1199,7 @@ def draw_cockpit_hud(width, height, aircraft):
 
 
 # ==============================================================================
-# 6. APLICAÇÃO PRINCIPAL E LOOP DE RENDERIZAÇÃO (GLFW + OPENGL)
+# 7. APLICAÇÃO PRINCIPAL E LOOP DE RENDERIZAÇÃO (GLFW + OPENGL)
 # ==============================================================================
 
 class TopGraphicsApp:
@@ -921,30 +1211,25 @@ class TopGraphicsApp:
         self.lighting_enabled = True
         self.textures_enabled = True
         self.wireframe_mode = False
-        self.wingman_formation = True
 
         # Parâmetros da Câmera 3 (Orbital Livre controlada por Mouse)
         self.orbit_yaw = 35.0
         self.orbit_pitch = 20.0
-        self.orbit_distance = 22.0
+        self.orbit_distance = 20.0
         self.mouse_dragging = False
         self.last_mouse_x = 0.0
         self.last_mouse_y = 0.0
 
-        # Posição suavizada da Chase Cam (Câmera 1)
-        self.chase_cam_pos = np.array([0.0, 22.0, 160.0], dtype=np.float32)
-        self.chase_cam_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-
-        # Instâncias dos dois caças F-14 Tomcat (Maverick + Wingman Iceman)
+        # Instância única do F-14 Tomcat (Wingman removido para simplificação)
         self.player = Aircraft()
-        self.wingman = Aircraft(is_wingman=True)
         self.player.reset(self.scene_mode)
-        self.chase_cam_pos = self.player.pos - self.player.forward * 18.0 + self.player.up * 5.0
+        self.chase_cam_pos = self.player.pos - self.player.forward * 17.5 + self.player.up * 4.6
+        self.chase_cam_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
     def setup_lighting(self):
         """Configura o modelo de iluminação de Phong/Gouraud (RD06)."""
         glEnable(GL_LIGHTING)
-        glEnable(GL_LIGHT0)  # Luz 0: Sol Direcional (Golden Hour / Pôr do Sol Top Gun)
+        glEnable(GL_LIGHT0)  # Luz 0: Sol Direcional
         glEnable(GL_LIGHT1)  # Luz 1: Brilho dinâmico dos pós-combustores do F-14
 
         glEnable(GL_COLOR_MATERIAL)
@@ -952,12 +1237,10 @@ class TopGraphicsApp:
         glShadeModel(GL_SMOOTH)
         glEnable(GL_NORMALIZE)
 
-        # Propriedades do Sol (Luz Direcional vinda do horizonte oeste)
         glLightfv(GL_LIGHT0, GL_AMBIENT,  [0.28, 0.26, 0.30, 1.0])
         glLightfv(GL_LIGHT0, GL_DIFFUSE,  [1.00, 0.88, 0.72, 1.0])
         glLightfv(GL_LIGHT0, GL_SPECULAR, [1.00, 0.95, 0.85, 1.0])
 
-        # Propriedades da Luz 1 (Fogo laranja dos motores do caça)
         glLightfv(GL_LIGHT1, GL_AMBIENT,  [0.0, 0.0, 0.0, 1.0])
         glLightfv(GL_LIGHT1, GL_DIFFUSE,  [1.0, 0.55, 0.15, 1.0])
         glLightfv(GL_LIGHT1, GL_SPECULAR, [1.0, 0.70, 0.30, 1.0])
@@ -966,7 +1249,7 @@ class TopGraphicsApp:
         glLightf(GL_LIGHT1, GL_QUADRATIC_ATTENUATION, 0.008)
 
     def key_callback(self, window, key, scancode, action, mods):
-        """Trata atalhos discretos de teclado para câmeras, cenas e inspeção técnica."""
+        """Trata atalhos discretos de teclado para câmeras, trem de pouso, cenas e inspeção."""
         if action != glfw.PRESS:
             return
 
@@ -981,15 +1264,17 @@ class TopGraphicsApp:
         elif key == glfw.KEY_3:
             self.camera_mode = 3
             print("[Câmera] Modo 3: Orbital Livre 360° (Arraste o mouse / Scroll para zoom)")
+        elif key == glfw.KEY_E:
+            self.player.toggle_gear()
         elif key == glfw.KEY_M:
             self.scene_mode = 2 if self.scene_mode == 1 else 1
             self.player.reset(self.scene_mode)
-            self.chase_cam_pos = self.player.pos - self.player.forward * 18.0 + self.player.up * 5.0
+            self.chase_cam_pos = self.player.pos - self.player.forward * 17.5 + self.player.up * 4.6
             nome = "Cena 1: Oceano + Porta-Aviões" if self.scene_mode == 1 else "Cena 2: Cânion Procedural"
             print(f"[Cenário] Alternado para {nome}")
         elif key == glfw.KEY_R:
             self.player.reset(self.scene_mode)
-            self.chase_cam_pos = self.player.pos - self.player.forward * 18.0 + self.player.up * 5.0
+            self.chase_cam_pos = self.player.pos - self.player.forward * 17.5 + self.player.up * 4.6
             print("[Voo] Posição do F-14 reiniciada.")
         elif key == glfw.KEY_L:
             self.lighting_enabled = not self.lighting_enabled
@@ -1007,10 +1292,6 @@ class TopGraphicsApp:
                 self.player.wing_sweep_angle = 68.0 if self.player.wing_sweep_angle < 45.0 else 20.0
             estado = "AUTOMÁTICO" if self.player.auto_wing_sweep else f"MANUAL ({self.player.wing_sweep_angle:.0f}°)"
             print(f"[RD08] Enflecamento das Asas do F-14: {estado}")
-        elif key == glfw.KEY_F:
-            self.wingman_formation = not self.wingman_formation
-            modo = "Formação Tática (Ala)" if self.wingman_formation else "Patrulha Circular Independente"
-            print(f"[Instanciação] Caça 2 (Iceman): {modo}")
 
     def mouse_button_callback(self, window, button, action, mods):
         if button == glfw.MOUSE_BUTTON_LEFT:
@@ -1029,36 +1310,6 @@ class TopGraphicsApp:
         if self.camera_mode == 3:
             self.orbit_distance = np.clip(self.orbit_distance - yoffset * 2.0, 8.0, 80.0)
 
-    def update_wingman(self, sim_time):
-        """Atualiza a posição e orientação do segundo F-14 instanciado na cena."""
-        if self.wingman_formation:
-            # Voa em formação escalonada à direita e ligeiramente atrás do jogador
-            offset = self.player.right * 14.0 - self.player.forward * 10.0 + self.player.up * 1.5
-            self.wingman.pos = self.player.pos + offset
-            self.wingman.forward = self.player.forward.copy()
-            self.wingman.up = self.player.up.copy()
-            self.wingman.right = self.player.right.copy()
-            self.wingman.throttle = self.player.throttle
-            self.wingman.wing_sweep_angle = self.player.wing_sweep_angle
-        else:
-            # Voa em uma grande órbita circular inclinada ao redor do centro da cena
-            radius = 220.0
-            omega = 0.32
-            angle = sim_time * omega
-            self.wingman.pos = np.array([
-                radius * math.cos(angle),
-                65.0 + 15.0 * math.sin(angle * 2.0),
-                radius * math.sin(angle)
-            ], dtype=np.float32)
-
-            tangent = np.array([-math.sin(angle), 0.0, math.cos(angle)], dtype=np.float32)
-            self.wingman.forward = normalize(tangent)
-            bank_up = normalize(np.array([-0.45 * math.cos(angle), 1.0, -0.45 * math.sin(angle)], dtype=np.float32))
-            self.wingman.right = normalize(np.cross(self.wingman.forward, bank_up))
-            self.wingman.up = normalize(np.cross(self.wingman.right, self.wingman.forward))
-            self.wingman.throttle = 0.75
-            self.wingman.wing_sweep_angle = 55.0
-
     def apply_camera(self, dt):
         """Aplica gluLookAt conforme o modo de câmera ativo (RD07)."""
         p = self.player.pos
@@ -1066,7 +1317,6 @@ class TopGraphicsApp:
         u = self.player.up
 
         if self.camera_mode == 1:
-            # Modo 1: Chase Cam com interpolação suave (efeito de inércia/aceleração)
             desired_pos = p - f * 17.5 + u * 4.6
             lerp_factor = min(1.0, 8.5 * dt)
             self.chase_cam_pos += (desired_pos - self.chase_cam_pos) * lerp_factor
@@ -1079,7 +1329,6 @@ class TopGraphicsApp:
             )
 
         elif self.camera_mode == 2:
-            # Modo 2: Cockpit / Primeira Pessoa (dentro do canopy olhando para frente)
             eye = p + f * 2.4 + u * 0.82
             target = eye + f * 50.0
             gluLookAt(
@@ -1089,7 +1338,6 @@ class TopGraphicsApp:
             )
 
         elif self.camera_mode == 3:
-            # Modo 3: Orbital Esférica Livre controlada por Mouse
             yaw_rad = math.radians(self.orbit_yaw)
             pitch_rad = math.radians(self.orbit_pitch)
             cx = p[0] + self.orbit_distance * math.cos(pitch_rad) * math.sin(yaw_rad)
@@ -1104,7 +1352,7 @@ class TopGraphicsApp:
 
         window = glfw.create_window(
             1280, 720,
-            "Top Graphics - F-14 Tomcat 3D Flight Simulator (CEFET-MG)",
+            "Top Graphics v2 - F-14 Tomcat 3D Flight Simulator (CEFET-MG)",
             None, None
         )
         if not window:
@@ -1112,48 +1360,44 @@ class TopGraphicsApp:
             return
 
         glfw.make_context_current(window)
-        glfw.swap_interval(1)  # V-Sync ativado (60 FPS estáveis)
+        glfw.swap_interval(1)
 
-        # Registra callbacks de teclado e mouse
         glfw.set_key_callback(window, self.key_callback)
         glfw.set_mouse_button_callback(window, self.mouse_button_callback)
         glfw.set_cursor_pos_callback(window, self.cursor_pos_callback)
         glfw.set_scroll_callback(window, self.scroll_callback)
 
-        # Configurações globais do OpenGL
         glEnable(GL_DEPTH_TEST)
         glDepthFunc(GL_LEQUAL)
         self.setup_lighting()
 
-        # Compilação das Texturas Procedurais (RD05) e Display Lists
         ocean_tex = create_ocean_texture()
         deck_tex = create_deck_texture()
         canyon_tex = create_canyon_texture()
         wing_tex = create_wing_insignia_texture()
 
-        player_fuselage_list = build_f14_static_fuselage_list(wing_tex, is_wingman=False)
-        wingman_fuselage_list = build_f14_static_fuselage_list(wing_tex, is_wingman=True)
+        player_fuselage_list = build_f14_static_fuselage_list(wing_tex)
         scene1_list = build_scene1_carrier_list(ocean_tex, deck_tex)
         scene2_list = build_scene2_canyon_list(canyon_tex)
 
         last_time = time.time()
         start_time = last_time
 
-        print("\n" + "=" * 72)
-        print(" CONTROLES DE VOO E DEMONSTRAÇÃO (TOP GRAPHICS - F-14 TOMCAT)")
-        print("=" * 72)
-        print(" [Setas Cima/Baixo]    : Arfagem (Pitch - Mergulhar / Subir)")
-        print(" [Setas Esq/Dir]       : Rolagem (Roll - Inclinar Asas / Tonneau)")
-        print(" [A / D]               : Guinada (Yaw - Leme Horizontal)")
-        print(" [W / S]               : Potência das Turbinas (Throttle / Afterburner)")
+        print("\n" + "=" * 76)
+        print(" CONTROLES DE VOO E DEMONSTRAÇÃO (TOP GRAPHICS v2 - F-14 TOMCAT)")
+        print("=" * 76)
+        print(" [W / S]               : Potência (Throttle) / Segure 'S' no convés para Frear")
+        print(" [Setas Baixo / Cima]  : Puxar Manche (Subir/Decolar) / Empurrar (Mergulhar)")
+        print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas em voo)")
+        print(" [A / D]               : Guinada (Leme em voo / Direção da roda no convés)")
+        print(" [E]                   : Recolher / Baixar Trem de Pouso Retrátil (RD08)")
+        print(" [G]                   : Alternar Enflecamento das Asas (Auto <-> Manual)")
         print(" [1 / 2 / 3]           : Câmeras (1: Chase, 2: Cockpit/HUD, 3: Orbital Mouse)")
         print(" [M]                   : Alternar Cenário (Porta-Aviões <-> Cânion)")
-        print(" [G]                   : Alternar Enflecamento das Asas (Auto <-> Manual)")
-        print(" [F]                   : Alternar Caça Ala (Formação <-> Órbita Circular)")
         print(" [L / T / Z]           : Ligar/Desligar Luzes (L), Texturas (T), Wireframe (Z)")
-        print(" [R]                   : Reiniciar Posição do Caça")
+        print(" [R]                   : Reiniciar Posição do Caça imediatamente")
         print(" [ESC]                 : Sair")
-        print("=" * 72 + "\n")
+        print("=" * 76 + "\n")
 
         while not glfw.window_should_close(window):
             now = time.time()
@@ -1163,16 +1407,16 @@ class TopGraphicsApp:
 
             glfw.poll_events()
 
-            # Leitura contínua dos comandos de voo
             pitch_in = 0.0
             roll_in = 0.0
             yaw_in = 0.0
             throttle_in = 0.0
+            brake_active = False
 
             if glfw.get_key(window, glfw.KEY_UP) == glfw.PRESS:
-                pitch_in -= 1.0  # Empurrar o manche (mergulhar)
+                pitch_in -= 1.0
             if glfw.get_key(window, glfw.KEY_DOWN) == glfw.PRESS:
-                pitch_in += 1.0  # Puxar o manche (subir)
+                pitch_in += 1.0
             if glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS:
                 roll_in -= 1.0
             if glfw.get_key(window, glfw.KEY_RIGHT) == glfw.PRESS:
@@ -1185,25 +1429,28 @@ class TopGraphicsApp:
                 throttle_in += 1.0
             if glfw.get_key(window, glfw.KEY_S) == glfw.PRESS:
                 throttle_in -= 1.0
+                brake_active = True
 
-            # Atualiza cinemática 6-DOF do jogador e do caça Ala
-            self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in)
-            self.update_wingman(sim_time)
+            # Atualiza cinemática, trem de pouso e colisões do F-14
+            self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
 
-            # Atualiza título da janela com telemetria de voo em tempo real
-            glfw.set_window_title(
-                window,
-                f"Top Graphics | F-14 Tomcat | Vel: {self.player.speed * 10:.0f} kt | "
-                f"Alt: {self.player.pos[1] * 10:.0f} ft | Asas: {self.player.wing_sweep_angle:.0f}° | "
-                f"Cam: {self.camera_mode} | Cena: {self.scene_mode}"
-            )
+            # Atualiza título da janela com estado do voo, trem de pouso e alertas
+            if self.player.crashed:
+                title_status = f"GAME OVER: {self.player.crash_reason}"
+            else:
+                gear_str = "DOWN" if self.player.gear_down else "UP"
+                ground_str = "NO CONVÉS" if self.player.on_ground else "EM VOO"
+                title_status = (
+                    f"{ground_str} | Vel: {self.player.speed * 10:.0f} kt | "
+                    f"Alt: {self.player.pos[1] * 10:.0f} ft | Trem(E): {gear_str} | "
+                    f"Asas(G): {self.player.wing_sweep_angle:.0f}° | Cam: {self.camera_mode}"
+                )
+            glfw.set_window_title(window, f"Top Graphics v2 | {title_status}")
 
-            # Configuração do Viewport e Projeção Perspectiva
             width, height = glfw.get_framebuffer_size(window)
             height = max(1, height)
             glViewport(0, 0, width, height)
 
-            # Cor do céu: pôr do sol alaranjado na Cena 2 ou azul naval na Cena 1
             if self.scene_mode == 1:
                 glClearColor(0.42, 0.62, 0.85, 1.0)
             else:
@@ -1218,13 +1465,10 @@ class TopGraphicsApp:
             glMatrixMode(GL_MODELVIEW)
             glLoadIdentity()
 
-            # Posiciona a câmera virtual ativa (RD07)
             self.apply_camera(dt)
 
-            # Configura estados de iluminação (RD06) e textura (RD05)
             if self.lighting_enabled:
                 glEnable(GL_LIGHTING)
-                # Posiciona a luz direcional (Sol) e a luz pontual nos motores do F-14
                 glLightfv(GL_LIGHT0, GL_POSITION, [0.6, 0.45, 0.65, 0.0])
                 afterburner_pos = self.player.pos - self.player.forward * 5.5
                 glLightfv(
@@ -1239,7 +1483,6 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
-            # Renderiza o Cenário Selecionado (Cena 1: Porta-Aviões ou Cena 2: Cânion)
             if self.scene_mode == 1:
                 glCallList(scene1_list)
             else:
@@ -1250,16 +1493,14 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
-            # Renderiza o F-14 do Jogador (exceto se estiver na câmera de cockpit 1ª pessoa)
             if self.camera_mode != 2:
                 draw_f14_complete(self.player, player_fuselage_list, wing_tex, sim_time)
 
-            # Renderiza o segundo F-14 instanciado (Wingman / Iceman)
-            draw_f14_complete(self.wingman, wingman_fuselage_list, wing_tex, sim_time)
-
-            # Se estiver na Câmera 2 (Cockpit), desenha o HUD verde tático na tela
             if self.camera_mode == 2:
                 draw_cockpit_hud(width, height, self.player)
+
+            if self.player.crashed:
+                draw_crash_overlay(width, height)
 
             glfw.swap_buffers(window)
 
@@ -1274,8 +1515,8 @@ def select_initial_scene():
     print("   TOP GRAPHICS - SIMULADOR DE VOO F-14 TOMCAT (CEFET-MG)")
     print("=" * 68)
     print(" Escolha o cenário inicial (você também pode alternar com 'M' em voo):")
-    print("   [1] Cena 1: Oceano Texturizado + Porta-Aviões (USS Enterprise)")
-    print("   [2] Cena 2: Cânion Procedural ('Trench Run' - Top Gun: Maverick)")
+    print("   [1] Cena 1: Oceano + Porta-Aviões (Inicia parado no convés para decolar)")
+    print("   [2] Cena 2: Cânion Procedural ('Trench Run' - Inicia em voo)")
     print("=" * 68)
     try:
         choice = input(" Digite 1 ou 2 [Padrão = 1]: ").strip()
