@@ -6,14 +6,15 @@
 * TODO: allow the fighter jet to remain stationary (throttle 0) while on the ground
 * TODO: implement aircraft carrier collision with the landing gear
 * TODO: implement fighter jet collision with the water in Scenario 1 and with the rocks/ground in Scenario 2 ("game over" to reset, if easier)
-
-#### ToDo
 * TODO: modularize the project (architecture planned in the proposal)
+#### ToDo
+* TODO: landing gear down reduces max speed and acceleration
 * TODO: model the F14-TC based on its technical specifications
 
 #### Future Improvements / Enhancements (Non-Urgent)
 * TODO: model taileron and wing spoiler movement during roll, elevators during pitch, and the rudders during yaw (partially implemented)
 * TODO: allow afterburners to be toggled on and off to increase speed
+* TODO: landing gear down reduces max speed and acceleration
 * TODO: controller integration
 * TODO: implement textures in assets
 * TODO: implement procedurally generated clouds (semi-transparent vapor, not solid objects)
