@@ -1,11 +1,11 @@
 """
 ================================================================================
 TopGraphics | scene_carrier.py
-Cena 1: oceano texturizado + porta-aviões (USS Enterprise simplificado).
-Também exporta as constantes do convés usadas na colisão/pouso (flight_kinematics).
+Cena 1: Oceano texturizado + Porta-Aviões Nuclear USS Enterprise (CVN-65)
 ================================================================================
 """
 
+# TODO: remove lighted floats from map
 # TODO: implement procedurally generated clouds (semi-transparent vapor, not solid objects)
 # TODO: render more of the map as needed or implement a visual map boundary
 
@@ -15,15 +15,15 @@ import numpy as np
 from OpenGL.GL import *
 
 from renderer_utils import draw_box, upload_texture_rgb
-
-
-# ==============================================================================
-# CONSTANTES GEOMÉTRICAS DO PORTA-AVIÕES E COLISÃO
-# ==============================================================================
-
-CARRIER_DECK_Y = 10.15          # Altura da superfície da pista do porta-aviões
-CARRIER_DECK_HALF_W = 24.0      # Meia-largura do convés (-24 a +24 no eixo X)
-CARRIER_DECK_HALF_L = 115.0     # Meio-comprimento do convés (-115 a +115 no eixo Z)
+from cvn_65_model import (
+    CARRIER_DECK_Y,
+    CARRIER_DECK_HALF_W,
+    CARRIER_DECK_HALF_L,
+    create_cvn65_deck_texture,
+    draw_cvn65_carrier,
+    is_within_cvn65_deck_polygon,
+    check_cvn65_extra_collisions,
+)
 
 
 # ==============================================================================
@@ -52,23 +52,8 @@ def create_ocean_texture():
 
 
 def create_deck_texture():
-    """Gera uma textura 256x256 de pista de pouso de porta-aviões com faixas pintadas."""
-    size = 256
-    img = np.full((size, size, 3), 55, dtype=np.uint8)
-    rng = np.random.default_rng(42)
-    noise = rng.integers(-8, 9, size=(size, size, 3), dtype=np.int16)
-    img = np.clip(img.astype(np.int16) + noise, 35, 80).astype(np.uint8)
-
-    for y in range(size):
-        for x in range(size):
-            if abs(x - 24) < 4 or abs(x - (size - 24)) < 4:
-                img[y, x] = [230, 210, 60]
-            if abs(x - size // 2) < 4 and (y // 16) % 2 == 0:
-                img[y, x] = [235, 235, 235]
-            if abs(x - size // 2 + 28) < 2:
-                img[y, x] = [120, 125, 130]
-
-    return upload_texture_rgb(img)
+    """Delega a criação da textura de alta resolução do convés do CVN-65."""
+    return create_cvn65_deck_texture()
 
 
 # ==============================================================================
@@ -77,7 +62,8 @@ def create_deck_texture():
 
 def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
     """
-    Compila a Cena 1: Oceano amplo texturizado + Porta-Aviões USS Enterprise (CVN-65).
+    Compila a Cena 1: Oceano amplo texturizado + USS Enterprise (CVN-65) detalhado
+    + Luzes de aproximação na popa.
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
@@ -109,48 +95,14 @@ def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
         z += step
     glEnd()
 
-    # 2. Casco do Porta-Aviões (USS Enterprise) centrado na origem (0, 0, 0)
-    glDisable(GL_TEXTURE_2D)
-    glColor3f(0.32, 0.34, 0.38)
-    glPushMatrix()
-    glTranslatef(0.0, 5.0, 0.0)
-    draw_box(36.0, 10.0, 220.0)
-    glPopMatrix()
+    # 2. Porta-Aviões USS Enterprise (CVN-65) completo (cvn_65_model.py)
+    draw_cvn65_carrier(deck_tex_id)
 
-    # 3. Convés de Voo (Flight Deck) com textura UV de pista
-    glEnable(GL_TEXTURE_2D)
-    glBindTexture(GL_TEXTURE_2D, deck_tex_id)
-    glColor3f(0.95, 0.95, 0.95)
-    deck_w = CARRIER_DECK_HALF_W
-    deck_l = CARRIER_DECK_HALF_L
-    deck_y = CARRIER_DECK_Y
-    glBegin(GL_QUADS)
-    glNormal3f(0.0, 1.0, 0.0)
-    glTexCoord2f(0.0, 0.0)
-    glVertex3f(-deck_w, deck_y, -deck_l)
-    glTexCoord2f(0.0, 6.0)
-    glVertex3f(-deck_w, deck_y, deck_l)
-    glTexCoord2f(1.0, 6.0)
-    glVertex3f(deck_w, deck_y, deck_l)
-    glTexCoord2f(1.0, 0.0)
-    glVertex3f(deck_w, deck_y, -deck_l)
-    glEnd()
-
-    # 4. Superestrutura / Ilha de Comando ("Island") a estibordo (+X)
-    glDisable(GL_TEXTURE_2D)
-    glColor3f(0.45, 0.47, 0.52)
-    glPushMatrix()
-    glTranslatef(16.5, 17.5, -15.0)
-    draw_box(7.0, 15.0, 28.0)
-
-    glColor3f(0.20, 0.22, 0.25)
-    glTranslatef(0.0, 11.0, 0.0)
-    draw_box(2.2, 8.0, 4.0)
-    glPopMatrix()
-
-    # 5. Boias luminosas de aproximação na popa do porta-aviões
-    glPushAttrib(GL_LIGHTING_BIT)
+    # 3. Boias luminosas de aproximação alinhadas com a rampa de pouso na popa
+    glPushAttrib(GL_LIGHTING_BIT | GL_TEXTURE_BIT)
     glDisable(GL_LIGHTING)
+    glDisable(GL_TEXTURE_2D)
+    deck_l = CARRIER_DECK_HALF_L
     for i in range(1, 7):
         glColor3f(0.2, 1.0, 0.3)
         glPushMatrix()

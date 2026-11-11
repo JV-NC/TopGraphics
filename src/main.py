@@ -14,6 +14,7 @@ Execução (a partir da raiz do repositório):
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)
 # TODO: implement Scenario 3 (just the aircraft in camera 3 for model analisys and reaction of the controls)
 # TODO: implement HUD for plane information about velocity, altitude, landing gear, etc (all that is in window title moved in a hud)
+# TODO: implement compass or facing direction (as hud)
 
 import sys
 import time

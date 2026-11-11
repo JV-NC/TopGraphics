@@ -15,7 +15,10 @@ import numpy as np
 from math_utils import normalize
 from scene_carrier import CARRIER_DECK_Y, CARRIER_DECK_HALF_W, CARRIER_DECK_HALF_L
 from scene_canyon import canyon_height_func, canyon_center_x, CANYON_BUNKER_Z
-
+from scene_carrier import (
+    CARRIER_DECK_Y, CARRIER_DECK_HALF_W, CARRIER_DECK_HALF_L,
+    is_within_cvn65_deck_polygon, check_cvn65_extra_collisions
+)
 
 GEAR_HEIGHT_OFFSET = 1.45       # Altura do eixo central do F-14 até a base das rodas
 
@@ -178,21 +181,22 @@ class Aircraft:
         self.right = normalize(np.cross(self.forward, self.up))
 
     def is_within_carrier_deck_xz(self, pos=None):
-        """Verifica se a coordenada (X, Z) está sobre a área útil da pista do porta-aviões."""
+        """Verifica se a coordenada (X, Z) está sobre a área útil do polígono do CVN-65."""
         p = self.pos if pos is None else pos
-        return (abs(p[0]) <= CARRIER_DECK_HALF_W) and (abs(p[2]) <= CARRIER_DECK_HALF_L)
+        return is_within_cvn65_deck_polygon(float(p[0]), float(p[2]))
 
     def check_collisions(self, prev_pos, scene_mode):
         """
-        Verifica todas as colisões físicas do caça com o Porta-Aviões, Oceano e Cânion.
+        Verifica todas as colisões físicas do caça com o Porta-Aviões (CVN-65), Oceano e Cânion.
         """
         if self.crashed:
             return
 
         if scene_mode == 1:
-            # 1. Colisão com a Ilha de Comando (Superestrutura a estibordo do Porta-Aviões)
-            if (11.5 <= self.pos[0] <= 21.5) and (-30.5 <= self.pos[2] <= 0.5) and (self.pos[1] <= 30.0):
-                self.trigger_crash("COLISÃO COM A TORRE DE COMANDO DO PORTA-AVIÕES!")
+            # 1. Colisão com a Ilha Nuclear SCANFAR, Domo Beehive, Mastro em Treliça, Guindaste ou JBD
+            hit_struct, reason = check_cvn65_extra_collisions(self.pos, self.right, self.forward)
+            if hit_struct:
+                self.trigger_crash(reason)
                 return
 
             # 2. Interação e Colisão com o Convés / Casco do Porta-Aviões
@@ -200,15 +204,10 @@ class Aircraft:
             if self.is_within_carrier_deck_xz():
                 # Se estava acima do convés e desceu até a altura de toque
                 if not self.on_ground and self.pos[1] <= deck_contact_y and prev_pos[1] >= CARRIER_DECK_Y - 1.0:
-                    # Condições de pouso seguro:
-                    # - Trem de pouso baixado (gear_deploy > 0.75)
-                    # - Taxa de descida suave (forward[1] > -0.42)
-                    # - Asas niveladas (up[1] > 0.72)
                     if self.gear_deploy > 0.75 and self.forward[1] > -0.42 and self.up[1] > 0.72:
                         self.pos[1] = deck_contact_y
                         self.on_ground = True
                         self.afterburner = False
-                        # Nivela o vetor de voo paralelamente ao convés
                         self.forward[1] = 0.0
                         self.forward = normalize(self.forward)
                         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -223,7 +222,7 @@ class Aircraft:
                         self.trigger_crash("POUSO MUITO VIOLENTO OU DESNIVELADO NO CONVÉS!")
                         return
 
-                # Colisão frontal/lateral com o casco do navio abaixo do nível da pista
+                # Colisão frontal/lateral com o casco/sponsons do navio abaixo do nível da pista
                 elif not self.on_ground and self.pos[1] < CARRIER_DECK_Y:
                     self.trigger_crash("COLISÃO COM O CASCO DO PORTA-AVIÕES!")
                     return
