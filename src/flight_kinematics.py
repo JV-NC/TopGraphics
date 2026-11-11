@@ -2,12 +2,11 @@
 ================================================================================
 TopGraphics | flight_kinematics.py
 Cinemática de voo 6-DOF sem Gimbal Lock (base ortonormal local F, U, R + Rodrigues),
-modo solo no convés, trem de pouso retrátil e detecção de colisão.
+modo solo no convés, pós-combustor (afterburner), arrasto do trem de pouso e colisão.
 ================================================================================
 """
 
-# TODO: allow afterburners to be toggled on and off to increase speed
-# TODO: landing gear down reduces max speed and acceleration
+# TODO: implement maximum speeds and accelerations more consistent with the actual F-14 (1342 kt max)
 
 import math
 
@@ -19,6 +18,20 @@ from scene_canyon import canyon_height_func, canyon_center_x, CANYON_BUNKER_Z
 
 
 GEAR_HEIGHT_OFFSET = 1.45       # Altura do eixo central do F-14 até a base das rodas
+
+# Constantes de desempenho aerodinâmico e propulsão
+MIN_FLIGHT_SPEED = 28.0         # Velocidade mínima de sustentação (280 kt)
+MIN_GLIDE_SPEED = 18.0          # Velocidade mínima de planeio em voo (180 kt)
+MAX_SPEED_DRY = 110.0           # Velocidade máxima em empuxo seco / Military Power (1100 kt)
+MAX_SPEED_AB = 180.0            # Velocidade máxima com pós-combustor / Afterburner (1800 kt)
+
+ACCEL_RATE_DRY = 2.0            # Taxa base de aceleração em empuxo seco
+ACCEL_RATE_AB = 3.8             # Taxa de aceleração com pós-combustor ligado
+
+# Penalidades de arrasto aerodinâmico enquanto o trem de pouso não está 100% retraído
+GEAR_DRAG_SPEED_MULT = 0.58     # Reduz a velocidade máxima em até 42% com o trem baixado
+GEAR_DRAG_ACCEL_MULT = 0.50     # Reduz a aceleração em até 50% com o trem baixado
+GEAR_AIRBRAKE_DECEL = 3.2       # Frenagem aerodinâmica extra ao baixar o trem em alta velocidade
 
 
 def rodrigues_rotation(v, k, angle_rad):
@@ -35,7 +48,7 @@ def rodrigues_rotation(v, k, angle_rad):
 class Aircraft:
     """
     Representa o caça F-14 Tomcat no espaço 3D com referencial ortonormal local (F, U, R),
-    estados de solo/porta-aviões, trem de pouso retrátil e detecção de colisão.
+    estados de solo/porta-aviões, pós-combustor, trem de pouso retrátil e detecção de colisão.
     """
     def __init__(self):
         self.pos = np.array([0.0, CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET, 95.0], dtype=np.float32)
@@ -44,13 +57,14 @@ class Aircraft:
         self.right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
 
         self.speed = 0.0
-        self.min_flight_speed = 28.0   # Velocidade mínima de sustentação (stall/takeoff)
-        self.max_speed = 140.0
-        self.throttle = 0.0            # 0.0 (parado no chão) a 1.0 (pós-combustão máxima)
+        self.min_flight_speed = MIN_FLIGHT_SPEED
+        self.max_speed = MAX_SPEED_DRY
+        self.throttle = 0.0            # 0.0 (parado no chão) a 1.0 (potência máxima)
+        self.afterburner = False       # Estado do pós-combustor (Tecla 'E')
 
         # Estado de solo e trem de pouso retrátil
         self.on_ground = True
-        self.gear_down = True          # Comando lógico do trem de pouso (Tecla 'E')
+        self.gear_down = True          # Comando lógico do trem de pouso (Tecla 'Q')
         self.gear_deploy = 1.0         # Estado contínuo da animação: 1.0 (baixado) a 0.0 (recolhido)
 
         # Estado de colisão / Game Over
@@ -70,6 +84,7 @@ class Aircraft:
         self.crashed = False
         self.crash_reason = ""
         self.crash_timer = 0.0
+        self.afterburner = False
 
         self.forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -88,20 +103,53 @@ class Aircraft:
             # Cena 2: Começa em voo na entrada do Cânion com trem de pouso recolhido
             self.pos = np.array([0.0, 38.0, 360.0], dtype=np.float32)
             self.speed = 65.0
-            self.throttle = 0.50
+            self.throttle = 0.60
             self.on_ground = False
             self.gear_down = False
             self.gear_deploy = 0.0
-            self.wing_sweep_angle = 44.0
+            self.wing_sweep_angle = 40.0
+
+        self.max_speed = self.get_effective_max_speed()
 
     def toggle_gear(self):
-        """Alterna o recolhimento/acionamento do trem de pouso."""
+        """Alterna o recolhimento/acionamento do trem de pouso (Tecla 'Q')."""
         if self.on_ground:
             print("[Trem de Pouso] Não é possível recolher o trem de pouso enquanto apoiado no convés!")
             return
         self.gear_down = not self.gear_down
-        estado = "BAIXANDO (DEPLOY)" if self.gear_down else "RECOLHENDO (RETRACT)"
-        print(f"Trem de Pouso Retrátil: {estado}")
+        estado = "BAIXANDO (DEPLOY - Arrasto Ativo)" if self.gear_down else "RECOLHENDO (RETRACT - Arrasto Reduzido)"
+        print(f"[Trem de Pouso] {estado}")
+
+    def toggle_afterburner(self):
+        """Alterna o pós-combustor / Afterburner (Tecla 'E'), alterando vel. máxima e aceleração."""
+        if self.crashed:
+            return
+        self.afterburner = not self.afterburner
+        # Se ligou o afterburner com throttle muito baixo, aplica potência mínima para ignição
+        if self.afterburner and self.throttle < 0.25:
+            self.throttle = 0.25
+        estado = "LIGADO (Empuxo Máximo Supersônico)" if self.afterburner else "DESLIGADO (Empuxo Seco / Militar)"
+        print(f"[Afterburner] Pós-Combustor: {estado}")
+
+    def get_effective_max_speed(self):
+        """
+        Calcula a velocidade máxima efetiva considerando:
+          1. Estado do Pós-Combustor (MAX_SPEED_AB vs MAX_SPEED_DRY).
+          2. Resistência do ar (arrasto) proporcional à extensão do trem de pouso (gear_deploy).
+        """
+        base_max = MAX_SPEED_AB if self.afterburner else MAX_SPEED_DRY
+        drag_factor = 1.0 - (1.0 - GEAR_DRAG_SPEED_MULT) * self.gear_deploy
+        return base_max * drag_factor
+
+    def get_effective_accel_rate(self):
+        """
+        Calcula a taxa de aceleração efetiva considerando:
+          1. Estado do Pós-Combustor (ACCEL_RATE_AB vs ACCEL_RATE_DRY).
+          2. Resistência do ar enquanto o trem de pouso não estiver 100% retraído (gear_deploy > 0).
+        """
+        base_accel = ACCEL_RATE_AB if self.afterburner else ACCEL_RATE_DRY
+        drag_factor = 1.0 - (1.0 - GEAR_DRAG_ACCEL_MULT) * self.gear_deploy
+        return base_accel * drag_factor
 
     def trigger_crash(self, reason):
         """Ativa o estado de Game Over e agenda o reset automático."""
@@ -111,6 +159,7 @@ class Aircraft:
             self.crash_timer = 2.0  # Segundos até reiniciar automaticamente
             self.speed = 0.0
             self.throttle = 0.0
+            self.afterburner = False
             print(f"\n[GAME OVER] {reason} Reiniciando em 2 segundos (ou pressione 'R')...\n")
 
     def pitch(self, angle_rad):
@@ -142,7 +191,6 @@ class Aircraft:
 
         if scene_mode == 1:
             # 1. Colisão com a Ilha de Comando (Superestrutura a estibordo do Porta-Aviões)
-            # Ilha centrada em (16.5, 17.5, -15.0) com dimensões (7.0, 15.0, 28.0) + mastro
             if (11.5 <= self.pos[0] <= 21.5) and (-30.5 <= self.pos[2] <= 0.5) and (self.pos[1] <= 30.0):
                 self.trigger_crash("COLISÃO COM A TORRE DE COMANDO DO PORTA-AVIÕES!")
                 return
@@ -159,12 +207,13 @@ class Aircraft:
                     if self.gear_deploy > 0.75 and self.forward[1] > -0.42 and self.up[1] > 0.72:
                         self.pos[1] = deck_contact_y
                         self.on_ground = True
+                        self.afterburner = False
                         # Nivela o vetor de voo paralelamente ao convés
                         self.forward[1] = 0.0
                         self.forward = normalize(self.forward)
                         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
                         self.right = normalize(np.cross(self.forward, self.up))
-                        print("[Pouso] Toque suave no convés! Reduza o throttle ('S') para frear.")
+                        print("[Pouso] Toque suave no convés! Pós-combustor desligado. Segure 'S' para frear.")
                     elif self.gear_deploy <= 0.75:
                         self.pos[1] = CARRIER_DECK_Y + 0.4
                         self.trigger_crash("IMPACTO NO CONVÉS SEM O TREM DE POUSO BAIXADO!")
@@ -194,7 +243,6 @@ class Aircraft:
                 return
 
             # 2. Colisão com o solo e paredões rochosos do Cânion Procedural
-            # Testa o centro da fuselagem e as extremidades das asas esquerda/direita
             wing_span_check = 4.8
             sample_points = [
                 self.pos,
@@ -209,8 +257,7 @@ class Aircraft:
                     return
 
     def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):
-        """Atualiza a cinemática de solo/voo, trem de pouso e colisões."""
-        # Se bateu, apenas conta o cronômetro regressivo para reiniciar
+        """Atualiza a cinemática de solo/voo, pós-combustor, arrasto do trem de pouso e colisões."""
         if self.crashed:
             self.crash_timer -= dt
             if self.crash_timer <= 0.0:
@@ -219,12 +266,21 @@ class Aircraft:
 
         prev_pos = self.pos.copy()
 
-        # Atualiza animação suave do trem de pouso retrátil
+        # Atualiza animação suave do trem de pouso retrátil (0.0 = recolhido, 1.0 = baixado)
         target_gear = 1.0 if self.gear_down else 0.0
         self.gear_deploy += (target_gear - self.gear_deploy) * min(1.0, 4.5 * dt)
 
         # Atualiza potência (throttle) entre 0.0 e 1.0
         self.throttle = np.clip(self.throttle + throttle_input * 0.50 * dt, 0.0, 1.0)
+
+        # Se o piloto zerar o throttle completamente, desarma o pós-combustor automaticamente
+        if self.throttle < 1e-3 and self.afterburner:
+            self.afterburner = False
+            print("[Afterburner] Pós-combustor desarmado automaticamente (Throttle = 0%).")
+
+        # Calcula velocidade máxima e aceleração efetivas (considerando Afterburner e Arrasto do Trem)
+        self.max_speed = self.get_effective_max_speed()
+        accel_rate = self.get_effective_accel_rate()
 
         # ======================================================================
         # MODO SOLO / PISTA DO PORTA-AVIÕES (Permite ficar parado com throttle 0)
@@ -232,16 +288,15 @@ class Aircraft:
         if self.on_ground:
             self.gear_down = True
             self.gear_deploy = 1.0
+            self.max_speed = self.get_effective_max_speed()
+            accel_rate = self.get_effective_accel_rate()
 
-            # Velocidade alvo no solo: 0.0 se throttle == 0, até max_speed
             target_speed = self.throttle * self.max_speed
             if self.throttle < 1e-3:
-                # Desaceleração natural por atrito ou freio ativo ('S')
                 decel_rate = 38.0 if brake_active else 14.0
                 self.speed = max(0.0, self.speed - decel_rate * dt)
             else:
-                accel_rate = 2.2 * dt
-                self.speed += (target_speed - self.speed) * min(1.0, accel_rate)
+                self.speed += (target_speed - self.speed) * min(1.0, accel_rate * dt)
 
             # Direção (Steering da roda de nariz) com 'A' e 'D' quando em movimento no chão
             if self.speed > 0.5 and abs(yaw_input) > 1e-4:
@@ -252,12 +307,12 @@ class Aircraft:
             self.pos += self.forward * self.speed * dt
             self.pos[1] = CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET
 
-            # Decolagem (Rotation): se atingiu velocidade mínima de voo e puxou o manche (pitch_input > 0)
+            # Decolagem (Rotation): atingiu velocidade mínima de voo e puxou o manche (pitch_input > 0)
             if self.speed >= self.min_flight_speed and pitch_input > 0.1:
                 self.on_ground = False
-                self.pitch(0.12)  # Eleva o nariz suavemente para sair do convés
+                self.pitch(0.12)
                 self.pos[1] += 0.25
-                print("[Voo] Decolagem realizada! Pressione 'E' para recolher o trem de pouso.")
+                print("[Voo] Decolagem realizada! Pressione 'Q' para recolher o trem de pouso e reduzir o arrasto.")
 
             # Verifica se saiu dos limites da pista do porta-aviões
             elif not self.is_within_carrier_deck_xz():
@@ -269,10 +324,15 @@ class Aircraft:
         # MODO EM VOO (6-DOF Livre sem Gimbal Lock)
         # ======================================================================
         else:
-            # Em voo, mesmo com throttle 0 a aeronave mantém uma velocidade mínima de planeio
-            # mas se estiver muito lenta sofre perda de altitude (stall/gravidade)
-            target_speed = 18.0 + self.throttle * (self.max_speed - 18.0)
-            self.speed += (target_speed - self.speed) * min(1.0, 2.5 * dt)
+            target_speed = MIN_GLIDE_SPEED + self.throttle * (self.max_speed - MIN_GLIDE_SPEED)
+
+            # Se a velocidade atual está acima da velocidade alvo (ex: baixou o trem de pouso ou
+            # desligou o afterburner em alta velocidade), aplica arrasto aerodinâmico de frenagem
+            if self.speed > target_speed:
+                drag_decel = 1.8 + GEAR_AIRBRAKE_DECEL * self.gear_deploy
+                self.speed += (target_speed - self.speed) * min(1.0, drag_decel * dt)
+            else:
+                self.speed += (target_speed - self.speed) * min(1.0, accel_rate * dt)
 
             pitch_rate = 1.45
             roll_rate = 2.60
@@ -293,9 +353,9 @@ class Aircraft:
                 sink_rate = (self.min_flight_speed - self.speed) * 0.85
                 self.pos[1] -= sink_rate * dt
 
-        # Enflecamento automático das asas do F-14 (20° aberta -> 68° fechada em alta velocidade)
+        # Enflecamento automático das asas do F-14 (20° aberta -> 68° fechada em regime supersônico)
         if self.auto_wing_sweep:
-            speed_ratio = np.clip((self.speed - 30.0) / (self.max_speed - 30.0), 0.0, 1.0)
+            speed_ratio = np.clip((self.speed - 35.0) / (MAX_SPEED_AB - 35.0), 0.0, 1.0)
             target_sweep = 20.0 + 48.0 * speed_ratio
             self.wing_sweep_angle += (target_sweep - self.wing_sweep_angle) * min(1.0, 5.0 * dt)
 

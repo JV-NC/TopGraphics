@@ -13,6 +13,7 @@ Execução (a partir da raiz do repositório):
 # TODO: implement sound effects (engine sounds, ocean ambient sounds, and a soundtrack that can be muted)
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)
 # TODO: implement Scenario 3 (just the aircraft in camera 3 for model analisys and reaction of the controls)
+# TODO: implement HUD for plane information about velocity, altitude, landing gear, etc (all that is in window title moved in a hud)
 
 import sys
 import time
@@ -49,7 +50,7 @@ class TopGraphicsApp:
         self.textures_enabled = True
         self.wireframe_mode = False
 
-        # Instância única do F-14 Tomcat (Wingman removido para simplificação)
+        # Instância única do F-14 Tomcat
         self.player = Aircraft()
         self.player.reset(self.scene_mode)
 
@@ -57,7 +58,7 @@ class TopGraphicsApp:
         self.camera = CameraController(self.player)
 
     def key_callback(self, window, key, scancode, action, mods):
-        """Trata atalhos discretos de teclado para câmeras, trem de pouso, cenas e inspeção."""
+        """Trata atalhos discretos de teclado para câmeras, trem de pouso, afterburner, cenas e inspeção."""
         if action != glfw.PRESS:
             return
 
@@ -69,8 +70,10 @@ class TopGraphicsApp:
             self.camera.set_mode(2)
         elif key == glfw.KEY_3:
             self.camera.set_mode(3)
-        elif key == glfw.KEY_E:
+        elif key == glfw.KEY_Q:
             self.player.toggle_gear()
+        elif key == glfw.KEY_E:
+            self.player.toggle_afterburner()
         elif key == glfw.KEY_M:
             self.scene_mode = 2 if self.scene_mode == 1 else 1
             self.player.reset(self.scene_mode)
@@ -151,10 +154,11 @@ class TopGraphicsApp:
         print(" CONTROLES DE VOO E DEMONSTRAÇÃO (TOP GRAPHICS v2 - F-14 TOMCAT)")
         print("=" * 76)
         print(" [W / S]               : Potência (Throttle) / Segure 'S' no convés para Frear")
+        print(" [E]                   : Ligar / Desligar Pós-Combustor (Afterburner Boost)")
+        print(" [Q]                   : Recolher / Baixar Trem de Pouso Retrátil (Gera Arrasto)")
         print(" [Setas Baixo / Cima]  : Puxar Manche (Subir/Decolar) / Empurrar (Mergulhar)")
         print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas em voo)")
         print(" [A / D]               : Guinada (Leme em voo / Direção da roda no convés)")
-        print(" [E]                   : Recolher / Baixar Trem de Pouso Retrátil")
         print(" [G]                   : Alternar Enflecamento das Asas (Auto <-> Manual)")
         print(" [1 / 2 / 3]           : Câmeras (1: Chase, 2: Cockpit/HUD, 3: Orbital Mouse)")
         print(" [M]                   : Alternar Cenário (Porta-Aviões <-> Cânion)")
@@ -195,18 +199,19 @@ class TopGraphicsApp:
                 throttle_in -= 1.0
                 brake_active = True
 
-            # Atualiza cinemática, trem de pouso e colisões do F-14
+            # Atualiza cinemática, afterburner, trem de pouso e colisões do F-14
             self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
 
-            # Atualiza título da janela com estado do voo, trem de pouso e alertas
+            # Atualiza título da janela com estado do voo, trem de pouso, afterburner e alertas
             if self.player.crashed:
                 title_status = f"GAME OVER: {self.player.crash_reason}"
             else:
                 gear_str = "DOWN" if self.player.gear_down else "UP"
+                ab_str = "ON" if self.player.afterburner else "OFF"
                 ground_str = "NO CONVÉS" if self.player.on_ground else "EM VOO"
                 title_status = (
-                    f"{ground_str} | Vel: {self.player.speed * 10:.0f} kt | "
-                    f"Alt: {self.player.pos[1] * 10:.0f} ft | Trem(E): {gear_str} | "
+                    f"{ground_str} | Vel: {self.player.speed * 10:.0f}/{self.player.max_speed * 10:.0f} kt | "
+                    f"Alt: {self.player.pos[1] * 10:.0f} ft | Trem(Q): {gear_str} | AB(E): {ab_str} | "
                     f"Asas(G): {self.player.wing_sweep_angle:.0f}° | Cam: {self.camera.mode}"
                 )
             glfw.set_window_title(window, f"Top Graphics v2 | {title_status}")
@@ -234,11 +239,16 @@ class TopGraphicsApp:
             if self.lighting_enabled:
                 glEnable(GL_LIGHTING)
                 glLightfv(GL_LIGHT0, GL_POSITION, [0.6, 0.45, 0.65, 0.0])
-                afterburner_pos = self.player.pos - self.player.forward * 5.5
-                glLightfv(
-                    GL_LIGHT1, GL_POSITION,
-                    [afterburner_pos[0], afterburner_pos[1], afterburner_pos[2], 1.0]
-                )
+                # A luz pontual laranja (GL_LIGHT1) brilha intensamente quando o Afterburner está ativo
+                if self.player.afterburner and self.player.throttle > 0.02 and not self.player.crashed:
+                    glEnable(GL_LIGHT1)
+                    afterburner_pos = self.player.pos - self.player.forward * 5.5
+                    glLightfv(
+                        GL_LIGHT1, GL_POSITION,
+                        [afterburner_pos[0], afterburner_pos[1], afterburner_pos[2], 1.0]
+                    )
+                else:
+                    glDisable(GL_LIGHT1)
             else:
                 glDisable(GL_LIGHTING)
 

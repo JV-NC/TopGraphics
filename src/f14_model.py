@@ -6,8 +6,6 @@ naceles, asas de geometria variável, trem de pouso retrátil, profundores e pó
 ================================================================================
 """
 
-# TODO: model the F14-TC based on its technical specifications
-# TODO: model taileron and wing spoiler movement during roll, elevators during pitch, and the rudders during yaw (partially implemented)
 # TODO: implement F-14 skins for customization
 
 import math
@@ -975,10 +973,19 @@ def draw_f14_complete(aircraft, fuselage_dlist, wing_tex_id, sim_time):
         glPopMatrix()
 
     # 6. Bocais Cilíndricos das Turbinas e Pós-Combustão (Afterburners)
+    ab_active = getattr(aircraft, "afterburner", False) and aircraft.throttle > 0.02 and not aircraft.crashed
     pulse = 1.0 + 0.12 * math.sin(sim_time * 42.0)
-    flame_scale_z = (0.08 + 2.65 * aircraft.throttle) * pulse
-    flame_scale_xy = 0.68 + 0.42 * aircraft.throttle
-    nozzle_open_r = 0.24 + 0.06 * aircraft.throttle
+
+    if ab_active:
+        # Pós-combustor LIGADO ('E'): bocal dilata totalmente e pluma supersônica longa
+        nozzle_open_r = 0.26 + 0.06 * aircraft.throttle
+        flame_scale_z = (0.85 + 2.40 * aircraft.throttle) * pulse
+        flame_scale_xy = 0.78 + 0.38 * aircraft.throttle
+    else:
+        # Empuxo Seco / Militar: bocal contraído para otimizar velocidade de exaustão
+        nozzle_open_r = 0.20 + 0.03 * aircraft.throttle
+        flame_scale_z = (0.12 + 0.28 * aircraft.throttle) * pulse
+        flame_scale_xy = 0.52 + 0.18 * aircraft.throttle
 
     for side in (-1.0, 1.0):
         glPushMatrix()
@@ -996,7 +1003,7 @@ def draw_f14_complete(aircraft, fuselage_dlist, wing_tex_id, sim_time):
         glColor3f(0.08, 0.08, 0.10)
         draw_cylinder_z(nozzle_open_r * 0.92, nozzle_open_r * 0.92, 0.35, 0.80, segments=12, cap_start=True)
 
-        # Cones de Pós-Combustão (Afterburners dinâmicos com glScalef)
+        # Cones de Pós-Combustão (Pluma completa apenas com Afterburner ON; brilho curto em Dry Thrust)
         if aircraft.throttle > 0.02 and not aircraft.crashed:
             glPushAttrib(GL_LIGHTING_BIT | GL_ENABLE_BIT)
             glDisable(GL_LIGHTING)
@@ -1007,19 +1014,23 @@ def draw_f14_complete(aircraft, fuselage_dlist, wing_tex_id, sim_time):
             glTranslatef(0.0, 0.0, 0.78)
             glScalef(flame_scale_xy, flame_scale_xy, flame_scale_z)
 
-            # Pluma externa laranja/dourada
-            glColor4f(1.0, 0.52 + 0.32 * aircraft.throttle, 0.10, 0.88)
-            draw_cylinder_z(0.24, 0.01, 0.0, 1.45, segments=10)
+            if ab_active:
+                # Pluma externa laranja/dourada intensa
+                glColor4f(1.0, 0.52 + 0.32 * aircraft.throttle, 0.10, 0.88)
+                draw_cylinder_z(0.24, 0.01, 0.0, 1.45, segments=10)
 
-            # Núcleo interno de plasma azul-branco de alta temperatura
-            glColor4f(0.75, 0.92, 1.0, 0.95)
-            draw_cylinder_z(0.15, 0.005, 0.0, 0.95, segments=10)
+                # Núcleo interno de plasma azul-branco de alta temperatura
+                glColor4f(0.75, 0.92, 1.0, 0.95)
+                draw_cylinder_z(0.15, 0.005, 0.0, 0.95, segments=10)
 
-            # Anéis de choque supersônicos (Shock Diamonds)
-            if aircraft.throttle > 0.35:
+                # Anéis de choque supersônicos (Shock Diamonds)
                 glColor4f(1.0, 0.95, 0.80, 0.85)
                 for ring_z, ring_r in ((0.28, 0.14), (0.56, 0.10), (0.84, 0.06)):
                     draw_cylinder_z(ring_r, ring_r * 0.65, ring_z, ring_z + 0.08, segments=8)
+            else:
+                # Brilho térmico discreto apenas na saída do bocal (Empuxo Seco)
+                glColor4f(0.95, 0.45, 0.12, 0.45 * aircraft.throttle)
+                draw_cylinder_z(0.18, 0.05, 0.0, 0.55, segments=10)
 
             glPopMatrix()
             glPopAttrib()
