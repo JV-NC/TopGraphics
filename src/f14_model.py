@@ -6,6 +6,10 @@ naceles, asas de geometria variável, trem de pouso retrátil, profundores e pó
 ================================================================================
 """
 
+# TODO: model the F14-TC based on its technical specifications
+# TODO: model taileron and wing spoiler movement during roll, elevators during pitch, and the rudders during yaw (partially implemented)
+# TODO: implement F-14 skins for customization
+
 import math
 import numpy as np
 from OpenGL.GL import *
