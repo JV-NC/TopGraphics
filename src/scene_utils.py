@@ -2,9 +2,9 @@
 ================================================================================
 TopGraphics | scene_utils.py
 Utilitários compartilhados de ambiente e atmosfera para os cenários (Cena 1 e Cena 2):
-  1. Sistema de Nascer do Sol (Rising Sun): domo de horizonte crepuscular, disco solar
-     com múltiplos halos de difração atmosférica, reflexo especular no mar e atualização
-     dinâmica da iluminação direcional (GL_LIGHT0).
+  1. Sistema de Nascer do Sol (Rising Sun): abóbada celeste esférica completa (0° a 90°
+     até o zênite), disco solar com múltiplos halos de difração atmosférica, reflexo 
+     especular no mar e atualização dinâmica da iluminação direcional (GL_LIGHT0).
   2. Nuvens Procedurais Volumétricas (Vapor Semitransparente): textura RGBA gerada via
      ruído fractal trigonométrico (fBm) com decaimento radial gaussiano e renderização
      em camadas sem escrita no Z-Buffer (glDepthMask(GL_FALSE)), garantindo aspecto de
@@ -13,7 +13,7 @@ Utilitários compartilhados de ambiente e atmosfera para os cenários (Cena 1 e 
 """
 
 # TODO: render more of the map as needed or implement a visual map boundary (maybe create more map and implement a fake roundabout around the world, teleporting user to the other border)
-# TODO: fix: sky "crown" that creates a bege sky above the sun rising horizon
+# TODO: check optimization after
 
 import math
 import numpy as np
@@ -26,7 +26,8 @@ from math_utils import normalize
 # 1. CONFIGURAÇÃO DO NASCER DO SOL (RISING SUN) E ATMOSFERA
 # ==============================================================================
 
-SUN_DISTANCE = 2600.0           # Distância do disco solar no horizonte (-Z)
+SKY_DOME_RADIUS = 2200.0        # Raio da abóbada celeste esférica (dentro do zFar = 3500)
+SUN_DISTANCE = 2100.0           # Distância do disco solar no horizonte (-Z)
 SUN_AZIMUTH_RAD = -0.16         # Leve deslocamento a bombordo/oeste do eixo -Z
 SUN_RISE_DURATION = 240.0       # Tempo (s) para o sol subir da aurora até a manhã alta
 SUN_MIN_ELEV_DEG = 4.5          # Elevação inicial (rasante ao horizonte no início do voo)
@@ -39,8 +40,10 @@ def get_sun_state(sim_time, scene_mode=1):
     Retorna um dicionário com:
       - 'dir': vetor unitário apontando para o Sol (x, y, z)
       - 'progress': fração [0.0, 1.0] da subida solar
-      - 'zenith_color': cor RGB do topo do céu
-      - 'horizon_color': cor RGB da faixa do horizonte
+      - 'zenith_color': cor RGB do topo do céu (90 graus)
+      - 'upper_sky_color': cor RGB da atmosfera superior
+      - 'mid_sky_color': cor RGB da faixa intermediária crepuscular
+      - 'horizon_color': cor RGB da faixa do horizonte (0 graus)
       - 'sun_core_color': cor RGB do núcleo solar
       - 'sun_halo_color': cor RGB da coroa luminosa
       - 'light_ambient', 'light_diffuse', 'light_specular': parâmetros para GL_LIGHT0
@@ -60,19 +63,29 @@ def get_sun_state(sim_time, scene_mode=1):
     sun_dir = normalize(np.array([sx, sy, sz], dtype=np.float32))
 
     if scene_mode == 1:
-        # Cena 1 (Oceano + CVN-65): transição de azul-violeta crepuscular para azul celeste dourado
-        zenith_dawn = np.array([0.14, 0.22, 0.44], dtype=np.float32)
-        zenith_day  = np.array([0.30, 0.52, 0.82], dtype=np.float32)
+        # Cena 1 (Oceano + CVN-65): transição de azul-noite/índigo no zênite até laranja/dourado no horizonte
+        zenith_dawn = np.array([0.08, 0.14, 0.34], dtype=np.float32)
+        zenith_day  = np.array([0.18, 0.38, 0.72], dtype=np.float32)
+        upper_dawn  = np.array([0.16, 0.24, 0.48], dtype=np.float32)
+        upper_day   = np.array([0.32, 0.54, 0.84], dtype=np.float32)
+        mid_dawn    = np.array([0.48, 0.34, 0.46], dtype=np.float32)
+        mid_day     = np.array([0.62, 0.66, 0.78], dtype=np.float32)
         horiz_dawn  = np.array([0.92, 0.44, 0.24], dtype=np.float32)
         horiz_day   = np.array([0.96, 0.76, 0.52], dtype=np.float32)
     else:
-        # Cena 2 (Cânion): tons mais quentes de deserto / âmbar na alvorada
-        zenith_dawn = np.array([0.22, 0.18, 0.36], dtype=np.float32)
-        zenith_day  = np.array([0.42, 0.50, 0.72], dtype=np.float32)
+        # Cena 2 (Cânion): tons mais quentes de deserto / âmbar na alvorada e índigo profundo no topo
+        zenith_dawn = np.array([0.12, 0.13, 0.30], dtype=np.float32)
+        zenith_day  = np.array([0.24, 0.38, 0.66], dtype=np.float32)
+        upper_dawn  = np.array([0.24, 0.20, 0.40], dtype=np.float32)
+        upper_day   = np.array([0.42, 0.52, 0.74], dtype=np.float32)
+        mid_dawn    = np.array([0.58, 0.34, 0.38], dtype=np.float32)
+        mid_day     = np.array([0.72, 0.62, 0.64], dtype=np.float32)
         horiz_dawn  = np.array([0.96, 0.42, 0.20], dtype=np.float32)
         horiz_day   = np.array([0.95, 0.72, 0.46], dtype=np.float32)
 
     zenith_color = (1.0 - t) * zenith_dawn + t * zenith_day
+    upper_sky_color = (1.0 - t) * upper_dawn + t * upper_day
+    mid_sky_color = (1.0 - t) * mid_dawn + t * mid_day
     horizon_color = (1.0 - t) * horiz_dawn + t * horiz_day
 
     sun_core = np.array([1.0, 0.92 + 0.06 * t, 0.72 + 0.20 * t], dtype=np.float32)
@@ -103,6 +116,8 @@ def get_sun_state(sim_time, scene_mode=1):
         "progress": t,
         "elev_deg": elev_deg,
         "zenith_color": zenith_color,
+        "upper_sky_color": upper_sky_color,
+        "mid_sky_color": mid_sky_color,
         "horizon_color": horizon_color,
         "sun_core_color": sun_core,
         "sun_halo_color": sun_halo,
@@ -114,14 +129,11 @@ def get_sun_state(sim_time, scene_mode=1):
 
 def apply_sunrise_lighting(sun_state, lighting_enabled=True):
     """
-    Atualiza a cor de fundo (glClearColor) e os parâmetros da fonte direcional GL_LIGHT0
-    de acordo com a elevação atual do nascer do sol.
+    Atualiza a cor de fundo (glClearColor) usando a cor do zênite (evitando qualquer
+    fundo bege caso haja falha de preenchimento) e configura a fonte direcional GL_LIGHT0.
     """
     zc = sun_state["zenith_color"]
-    hc = sun_state["horizon_color"]
-    # Cor de limpeza intermediária entre o horizonte e o zênite
-    clear_rgb = 0.55 * zc + 0.45 * hc
-    glClearColor(float(clear_rgb[0]), float(clear_rgb[1]), float(clear_rgb[2]), 1.0)
+    glClearColor(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
 
     if lighting_enabled:
         glEnable(GL_LIGHTING)
@@ -135,12 +147,56 @@ def apply_sunrise_lighting(sun_state, lighting_enabled=True):
         glDisable(GL_LIGHTING)
 
 
+def _compute_sky_dome_vertex_color(elev_deg, azim_sin, azim_cos, sun_state):
+    """
+    Calcula a cor exata (r, g, b) de um vértice da abóbada celeste esférica
+    para a elevação 'elev_deg' (-30° a +90°) e direção azimutal (azim_sin, azim_cos).
+    Garante transição contínua desde o horizonte até o polo superior (zênite = 90°),
+    zerando a influência direcional do sol no topo para não criar costuras no polo.
+    """
+    hc = sun_state["horizon_color"]
+    mc = sun_state["mid_sky_color"]
+    uc = sun_state["upper_sky_color"]
+    zc = sun_state["zenith_color"]
+    sdir = sun_state["dir"]
+
+    if elev_deg <= 0.0:
+        # Abaixo da linha do horizonte (saia inferior da esfera)
+        t_sub = np.clip(-elev_deg / 30.0, 0.0, 1.0)
+        base_col = (1.0 - t_sub) * hc + t_sub * (0.45 * hc + 0.55 * zc)
+    elif elev_deg <= 14.0:
+        # Faixa 1: Horizonte incandescente (0° -> 14°)
+        u = elev_deg / 14.0
+        base_col = (1.0 - u) * hc + u * mc
+    elif elev_deg <= 38.0:
+        # Faixa 2: Transição crepuscular (14° -> 38°)
+        u = (elev_deg - 14.0) / (38.0 - 14.0)
+        base_col = (1.0 - u) * mc + u * uc
+    else:
+        # Faixa 3: Atmosfera superior até o Zênite profundo no topo (38° -> 90°)
+        u = (elev_deg - 38.0) / (90.0 - 38.0)
+        u_smooth = u * u * (3.0 - 2.0 * u)
+        base_col = (1.0 - u_smooth) * uc + u_smooth * zc
+
+    # Brilho azimutal na direção do Sol (decai suavemente com a elevação até zerar acima de 55°)
+    elev_atten = max(0.0, 1.0 - max(0.0, elev_deg) / 55.0) ** 2.0
+    if elev_atten > 1e-4:
+        # Direção horizontal unitária do vértice: (vx, vz) = (sin(ang), -cos(ang))
+        horiz_dot = max(0.0, azim_sin * float(sdir[0]) + (-azim_cos) * float(sdir[2]))
+        glow_boost = (horiz_dot ** 3.0) * 0.34 * elev_atten
+        r = min(1.0, float(base_col[0]) + glow_boost)
+        g = min(1.0, float(base_col[1]) + glow_boost * 0.55)
+        b = min(1.0, float(base_col[2]) + glow_boost * 0.25)
+        return r, g, b
+
+    return float(base_col[0]), float(base_col[1]), float(base_col[2])
+
+
 def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
     """
-    Renderiza o domo atmosférico de nascer do sol, a faixa incandescente do horizonte,
-    o disco solar com múltiplos halos translúcidos (vapor/glow) e a trilha de reflexo
-    solar sobre a água (na Cena 1).
-    Deve ser chamado ANTES da geometria opaca da cena (com glDepthMask(GL_FALSE)).
+    Renderiza a abóbada celeste esférica completa (Sky Dome de -30° até +90° no zênite),
+    fechando totalmente o topo do céu sem buracos ou cortes, acompanhando a posição
+    (X, Y, Z) da aeronave para nunca ser clipada pelo plano Far da perspectiva.
     """
     glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
     glDisable(GL_LIGHTING)
@@ -152,65 +208,90 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
     cx = float(anchor_pos[0])
+    cy = float(anchor_pos[1])
     cz = float(anchor_pos[2])
 
-    zc = sun_state["zenith_color"]
-    hc = sun_state["horizon_color"]
     sc = sun_state["sun_core_color"]
     sh = sun_state["sun_halo_color"]
+    zc = sun_state["zenith_color"]
     sdir = sun_state["dir"]
 
-    sky_radius = 2700.0
-    segments = 36
+    segments = 40
+    # Anéis de latitude (em graus) cobrindo de abaixo do horizonte (-30°) até quase o polo (+82°),
+    # seguidos de uma calota polar (GL_TRIANGLE_FAN) até exatamente +90° (Zênite).
+    lat_rings_deg = [-30.0, -10.0, 0.0, 5.0, 11.0, 18.0, 27.0, 38.0, 52.0, 68.0, 82.0]
 
     glPushMatrix()
-    glTranslatef(cx, 0.0, cz)
+    # Centraliza o domo nas coordenadas (X, Y, Z) do caça para manter o horizonte e o topo
+    # sempre a uma distância constante SKY_DOME_RADIUS (< zFar) em qualquer altitude.
+    glTranslatef(cx, cy, cz)
 
-    # 1. Cilindro/Domo de Gradiente Atmosférico 360° (Horizonte -> Meia-Altura -> Zênite)
-    y_bot = -80.0
-    y_mid = 420.0
-    y_top = 1550.0
+    # 1. Faixas Esféricas de Latitude da Abóbada Celeste (-30° até +82°)
+    for r_idx in range(len(lat_rings_deg) - 1):
+        lat1_deg = lat_rings_deg[r_idx]
+        lat2_deg = lat_rings_deg[r_idx + 1]
+        lat1_rad = math.radians(lat1_deg)
+        lat2_rad = math.radians(lat2_deg)
 
-    # Faixa inferior (Horizonte incandescente -> Transição intermediária)
-    mid_col = 0.38 * hc + 0.62 * zc
-    glBegin(GL_QUAD_STRIP)
+        y1 = SKY_DOME_RADIUS * math.sin(lat1_rad)
+        r1 = SKY_DOME_RADIUS * math.cos(lat1_rad)
+        y2 = SKY_DOME_RADIUS * math.sin(lat2_rad)
+        r2 = SKY_DOME_RADIUS * math.cos(lat2_rad)
+
+        glBegin(GL_QUAD_STRIP)
+        for i in range(segments + 1):
+            ang = (2.0 * math.pi * i) / segments
+            ca = math.cos(ang)
+            sa = math.sin(ang)
+
+            c1_r, c1_g, c1_b = _compute_sky_dome_vertex_color(lat1_deg, sa, ca, sun_state)
+            glColor4f(c1_r, c1_g, c1_b, 1.0)
+            glVertex3f(r1 * sa, y1, -r1 * ca)
+
+            c2_r, c2_g, c2_b = _compute_sky_dome_vertex_color(lat2_deg, sa, ca, sun_state)
+            glColor4f(c2_r, c2_g, c2_b, 1.0)
+            glVertex3f(r2 * sa, y2, -r2 * ca)
+        glEnd()
+
+    # 2. Calota Superior do Zênite (+82° até +90° exatos no topo da esfera)
+    top_ring_deg = lat_rings_deg[-1]
+    top_ring_rad = math.radians(top_ring_deg)
+    y_ring = SKY_DOME_RADIUS * math.sin(top_ring_rad)
+    r_ring = SKY_DOME_RADIUS * math.cos(top_ring_rad)
+
+    glBegin(GL_TRIANGLE_FAN)
+    # Vértice central no Polo Superior (0, SKY_DOME_RADIUS, 0) com a cor pura do zênite
+    glColor4f(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
+    glVertex3f(0.0, SKY_DOME_RADIUS, 0.0)
     for i in range(segments + 1):
         ang = (2.0 * math.pi * i) / segments
         ca = math.cos(ang)
         sa = math.sin(ang)
-        vx = sky_radius * sa
-        vz = -sky_radius * ca
-
-        # Intensifica o brilho alaranjado na direção próxima ao Sol
-        cos_sun = max(0.0, (vx * sdir[0] + vz * sdir[2]) / sky_radius)
-        glow_boost = (cos_sun ** 3.0) * 0.35
-
-        hr = min(1.0, float(hc[0]) + glow_boost)
-        hg = min(1.0, float(hc[1]) + glow_boost * 0.55)
-        hb = min(1.0, float(hc[2]) + glow_boost * 0.25)
-
-        glColor4f(hr, hg, hb, 1.0)
-        glVertex3f(vx, y_bot, vz)
-
-        glColor4f(float(mid_col[0]), float(mid_col[1]), float(mid_col[2]), 1.0)
-        glVertex3f(vx, y_mid, vz)
+        cr, cg, cb = _compute_sky_dome_vertex_color(top_ring_deg, sa, ca, sun_state)
+        glColor4f(cr, cg, cb, 1.0)
+        glVertex3f(r_ring * sa, y_ring, -r_ring * ca)
     glEnd()
 
-    # Faixa superior (Meia-Altura -> Zênite profundo)
-    glBegin(GL_QUAD_STRIP)
+    # 3. Calota Inferior (-30° até -90°) para evitar buracos em mergulhos verticais/loopings
+    bot_ring_deg = lat_rings_deg[0]
+    bot_ring_rad = math.radians(bot_ring_deg)
+    y_bot_ring = SKY_DOME_RADIUS * math.sin(bot_ring_rad)
+    r_bot_ring = SKY_DOME_RADIUS * math.cos(bot_ring_rad)
+    nadir_col = 0.35 * sun_state["horizon_color"] + 0.65 * zc
+
+    glBegin(GL_TRIANGLE_FAN)
+    glColor4f(float(nadir_col[0]), float(nadir_col[1]), float(nadir_col[2]), 1.0)
+    glVertex3f(0.0, -SKY_DOME_RADIUS, 0.0)
     for i in range(segments + 1):
         ang = (2.0 * math.pi * i) / segments
-        vx = sky_radius * math.sin(ang)
-        vz = -sky_radius * math.cos(ang)
-
-        glColor4f(float(mid_col[0]), float(mid_col[1]), float(mid_col[2]), 1.0)
-        glVertex3f(vx, y_mid, vz)
-
-        glColor4f(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
-        glVertex3f(vx, y_top, vz)
+        ca = math.cos(ang)
+        sa = math.sin(ang)
+        cr, cg, cb = _compute_sky_dome_vertex_color(bot_ring_deg, sa, ca, sun_state)
+        glColor4f(cr, cg, cb, 1.0)
+        glVertex3f(r_bot_ring * sa, y_bot_ring, -r_bot_ring * ca)
     glEnd()
 
-    # 2. Disco Solar e Coroas de Difração (Billboard alinhado ao vetor do Sol)
+    # 4. Disco Solar e Coroas de Difração (Billboard alinhado ao vetor do Sol)
     sun_pos = sdir * SUN_DISTANCE
     up_world = np.array([0.0, 1.0, 0.0], dtype=np.float32)
     sun_right = normalize(np.cross(sdir, up_world))
@@ -218,10 +299,10 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
 
     # Desenha 4 camadas concêntricas de halo (do brilho atmosférico amplo até o núcleo solar)
     halo_layers = [
-        (680.0, 0.0,  [sh[0], sh[1] * 0.75, sh[2] * 0.5, 0.22]),
-        (360.0, 0.0,  [sh[0], sh[1],        sh[2],       0.38]),
-        (175.0, 0.25, [sc[0], sc[1] * 0.92, sc[2] * 0.7, 0.65]),
-        ( 92.0, 0.96, [sc[0], sc[1],        sc[2],       0.98]),
+        (560.0, 0.0,  [sh[0], sh[1] * 0.75, sh[2] * 0.5, 0.22]),
+        (300.0, 0.0,  [sh[0], sh[1],        sh[2],       0.38]),
+        (145.0, 0.25, [sc[0], sc[1] * 0.92, sc[2] * 0.7, 0.65]),
+        ( 76.0, 0.96, [sc[0], sc[1],        sc[2],       0.98]),
     ]
 
     fan_segs = 28
