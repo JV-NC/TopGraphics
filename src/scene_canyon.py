@@ -3,11 +3,11 @@
 TopGraphics | scene_canyon.py
 Cena 2: cânion procedural ("Trench Run"). Contém a função matemática do terreno
 (usada na malha 3D e na colisão exata com a rocha) e o bunker alvo.
+Integrado com scene_utils.py (Nascer do Sol e Nuvens de Vapor Procedurais).
 ================================================================================
 """
 
 # TODO: implement procedurally generated rocks for scenario 2 (use same texture and has colision)
-# TODO: render more of the map as needed or implement a visual map boundary
 
 import math
 
@@ -84,8 +84,8 @@ def build_scene2_canyon_list(canyon_tex_id):
     glNewList(dlist, GL_COMPILE)
 
     glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
-    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.15, 0.12, 0.10, 1.0])
-    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 10.0)
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.22, 0.16, 0.12, 1.0])
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 14.0)
 
     x_min, x_max, dx = -360.0, 360.0, 18.0
     z_min, z_max, dz = -1400.0, 500.0, 20.0

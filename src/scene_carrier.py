@@ -1,20 +1,17 @@
 """
 ================================================================================
 TopGraphics | scene_carrier.py
-Cena 1: Oceano texturizado + Porta-Aviões Nuclear USS Enterprise (CVN-65)
+Cena 1: Oceano texturizado + Porta-Aviões Nuclear USS Enterprise (CVN-65).
+Integrado com scene_utils.py (Nascer do Sol e Nuvens de Vapor Procedurais).
 ================================================================================
 """
-
-# TODO: remove lighted floats from map
-# TODO: implement procedurally generated clouds (semi-transparent vapor, not solid objects)
-# TODO: render more of the map as needed or implement a visual map boundary
 
 import math
 
 import numpy as np
 from OpenGL.GL import *
 
-from renderer_utils import draw_box, upload_texture_rgb
+from renderer_utils import upload_texture_rgb
 from cvn_65_model import (
     CARRIER_DECK_Y,
     CARRIER_DECK_HALF_W,
@@ -41,11 +38,11 @@ def create_ocean_texture():
                 + math.cos(y * 0.25) * 12
                 + math.sin((x + y) * 0.15) * 8
             )
-            r = np.clip(12 + wave * 0.4, 5, 45)
-            g = np.clip(65 + wave * 0.9, 40, 110)
-            b = np.clip(135 + wave * 1.4, 95, 190)
+            r = np.clip(16 + wave * 0.5, 8, 52)
+            g = np.clip(62 + wave * 0.9, 38, 108)
+            b = np.clip(128 + wave * 1.4, 88, 185)
             if x % 32 == 0 or y % 32 == 0:
-                r, g, b = min(255, r + 20), min(255, g + 30), min(255, b + 35)
+                r, g, b = min(255, r + 18), min(255, g + 26), min(255, b + 32)
             img[y, x] = [int(r), int(g), int(b)]
 
     return upload_texture_rgb(img)
@@ -62,17 +59,17 @@ def create_deck_texture():
 
 def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
     """
-    Compila a Cena 1: Oceano amplo texturizado + USS Enterprise (CVN-65) detalhado
-    + Luzes de aproximação na popa.
+    Compila a Cena 1: Oceano amplo texturizado com reflexo especular para o
+    nascer do sol + USS Enterprise (CVN-65) detalhado (boias luminosas removidas).
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
 
-    # 1. Superfície do Oceano com repetição de textura UV
+    # 1. Superfície do Oceano com repetição de textura UV e brilho especular dourado
     glBindTexture(GL_TEXTURE_2D, ocean_tex_id)
-    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.4, 0.45, 0.5, 1.0])
-    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 32.0)
-    glColor3f(0.85, 0.92, 1.0)
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.65, 0.55, 0.42, 1.0])
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 42.0)
+    glColor3f(0.82, 0.88, 0.96)
 
     grid_size = 2400.0
     step = 120.0
@@ -97,24 +94,6 @@ def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
 
     # 2. Porta-Aviões USS Enterprise (CVN-65) completo (cvn_65_model.py)
     draw_cvn65_carrier(deck_tex_id)
-
-    # 3. Boias luminosas de aproximação alinhadas com a rampa de pouso na popa
-    glPushAttrib(GL_LIGHTING_BIT | GL_TEXTURE_BIT)
-    glDisable(GL_LIGHTING)
-    glDisable(GL_TEXTURE_2D)
-    deck_l = CARRIER_DECK_HALF_L
-    for i in range(1, 7):
-        glColor3f(0.2, 1.0, 0.3)
-        glPushMatrix()
-        glTranslatef(-10.0, 10.5, deck_l + i * 35.0)
-        draw_box(1.5, 1.5, 1.5)
-        glPopMatrix()
-
-        glPushMatrix()
-        glTranslatef(10.0, 10.5, deck_l + i * 35.0)
-        draw_box(1.5, 1.5, 1.5)
-        glPopMatrix()
-    glPopAttrib()
 
     glEndList()
     return dlist

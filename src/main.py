@@ -14,7 +14,7 @@ Execução (a partir da raiz do repositório):
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)
 # TODO: implement Scenario 3 (just the aircraft in camera 3 for model analisys and reaction of the controls)
 # TODO: implement HUD for plane information about velocity, altitude, landing gear, etc (all that is in window title moved in a hud)
-# TODO: implement compass or facing direction (as hud)
+# TODO: implement compass or facing direction (as hud) and/or use GPS lat-long coordinates
 
 import sys
 import time
@@ -35,6 +35,15 @@ from f14_model import (
 )
 from scene_carrier import create_ocean_texture, create_deck_texture, build_scene1_carrier_list
 from scene_canyon import create_canyon_texture, build_scene2_canyon_list
+from scene_utils import (
+    create_cloud_vapor_texture,
+    build_procedural_clouds_list,
+    get_sun_state,
+    apply_sunrise_lighting,
+    draw_rising_sun_and_sky,
+    draw_ocean_sun_glitter,
+    draw_procedural_clouds,
+)
 from renderer_utils import setup_lighting, draw_cockpit_hud, draw_crash_overlay
 
 
@@ -143,10 +152,13 @@ class TopGraphicsApp:
         deck_tex = create_deck_texture()
         canyon_tex = create_canyon_texture()
         wing_tex = create_wing_insignia_texture()
+        cloud_vapor_tex = create_cloud_vapor_texture()
 
         player_fuselage_list = build_f14_static_fuselage_list(wing_tex)
         scene1_list = build_scene1_carrier_list(ocean_tex, deck_tex)
         scene2_list = build_scene2_canyon_list(canyon_tex)
+        clouds1_list = build_procedural_clouds_list(scene_mode=1)
+        clouds2_list = build_procedural_clouds_list(scene_mode=2)
 
         last_time = time.time()
         start_time = last_time
@@ -221,10 +233,9 @@ class TopGraphicsApp:
             height = max(1, height)
             glViewport(0, 0, width, height)
 
-            if self.scene_mode == 1:
-                glClearColor(0.42, 0.62, 0.85, 1.0)
-            else:
-                glClearColor(0.78, 0.55, 0.38, 1.0)
+            # Calcula o estado atual do nascer do sol e aplica cor de fundo
+            sun_state = get_sun_state(sim_time, self.scene_mode)
+            apply_sunrise_lighting(sun_state, self.lighting_enabled)
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
@@ -237,10 +248,13 @@ class TopGraphicsApp:
 
             self.camera.apply(self.player, dt)
 
+            # 1. Domo de Horizonte Crepuscular + Disco Solar e Halos (sem escrita no Z-buffer)
+            draw_rising_sun_and_sky(self.player.pos, sun_state, self.scene_mode)
+
+            # Reaplica a posição da luz direcional do Sol (GL_LIGHT0) no espaço de mundo atual
             if self.lighting_enabled:
-                glEnable(GL_LIGHTING)
-                glLightfv(GL_LIGHT0, GL_POSITION, [0.6, 0.45, 0.65, 0.0])
-                # A luz pontual laranja (GL_LIGHT1) brilha intensamente quando o Afterburner está ativo
+                apply_sunrise_lighting(sun_state, True)
+                # Luz pontual laranja (GL_LIGHT1) brilha quando o Afterburner está ativo
                 if self.player.afterburner and self.player.throttle > 0.02 and not self.player.crashed:
                     glEnable(GL_LIGHT1)
                     afterburner_pos = self.player.pos - self.player.forward * 5.5
@@ -258,8 +272,10 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
+            # 2. Geometria Opaca do Cenário (Oceano + CVN-65 ou Cânion Procedural)
             if self.scene_mode == 1:
                 glCallList(scene1_list)
+                draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
             else:
                 glCallList(scene2_list)
 
@@ -268,9 +284,16 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
+            # 3. F-14 Tomcat (Geometria Opaca + Afterburners)
             if self.camera.mode != 2:
                 draw_f14_complete(self.player, player_fuselage_list, wing_tex, sim_time)
 
+            # 4. Nuvens Procedurais de Vapor Semitransparente (Renderizadas APÓS objetos opacos
+            #    com glDepthMask(GL_FALSE) para nunca bloquear o caça ou criar bordas duras)
+            active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
+            draw_procedural_clouds(active_clouds, cloud_vapor_tex, sim_time)
+
+            # 5. Overlays 2D (HUD do Cockpit e Alerta de Colisão)
             if self.camera.mode == 2:
                 draw_cockpit_hud(width, height, self.player)
 
@@ -280,6 +303,7 @@ class TopGraphicsApp:
             glfw.swap_buffers(window)
 
         glfw.terminate()
+
 
 def select_initial_scene():
     """Menu rápido no terminal ao iniciar a aplicação (ou via argumento de linha de comando)."""
@@ -300,6 +324,7 @@ def select_initial_scene():
     except EOFError:
         pass
     return 1
+
 
 if __name__ == "__main__":
     scene_choice = select_initial_scene()
