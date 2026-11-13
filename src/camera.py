@@ -3,6 +3,8 @@
 TopGraphics | camera.py
 Sistema de câmeras virtuais: 1) Chase Cam, 2) Cockpit Cam, 3) Orbital Livre (mouse).
 Independente de GLFW: o main.py repassa os eventos de mouse para os métodos on_*.
+Inclui suporte ao teleporte toroidal (apply_wrap_delta) para manter a Chase Cam
+perfeitamente sincronizada quando a aeronave cruza a borda do mapa ("Roundabout").
 ================================================================================
 """
 
@@ -52,6 +54,15 @@ class CameraController:
         self.chase_cam_pos = (
             aircraft.pos - aircraft.forward * CHASE_BACK_DIST + aircraft.up * CHASE_UP_DIST
         )
+
+    def apply_wrap_delta(self, wrap_delta):
+        """
+        Desloca a posição suavizada da Chase Cam pelo mesmo vetor de teleporte
+        toroidal ('wrap_delta') aplicado ao caça ao cruzar o limite do mapa,
+        eliminando qualquer chicoteamento ou salto visual da câmera.
+        """
+        if wrap_delta is not None and (abs(wrap_delta[0]) > 1e-3 or abs(wrap_delta[2]) > 1e-3):
+            self.chase_cam_pos += wrap_delta
 
     def on_mouse_button(self, pressed, x, y):
         """Botão esquerdo do mouse: inicia/encerra o arraste da câmera orbital."""

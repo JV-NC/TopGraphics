@@ -43,6 +43,7 @@ from scene_utils import (
     draw_rising_sun_and_sky,
     draw_ocean_sun_glitter,
     draw_procedural_clouds,
+    draw_periodic_scene,
 )
 from renderer_utils import setup_lighting, draw_cockpit_hud, draw_crash_overlay
 
@@ -129,7 +130,7 @@ class TopGraphicsApp:
 
         window = glfw.create_window(
             1280, 720,
-            "Top Graphics v2 - F-14 Tomcat 3D Flight Simulator (CEFET-MG)",
+            "Top Graphics - F-14 Tomcat 3D Flight Simulator (CEFET-MG)",
             None, None
         )
         if not window:
@@ -164,7 +165,7 @@ class TopGraphicsApp:
         start_time = last_time
 
         print("\n" + "=" * 76)
-        print(" CONTROLES DE VOO E DEMONSTRAÇÃO (TOP GRAPHICS v2 - F-14 TOMCAT)")
+        print(" CONTROLES DE VOO E DEMONSTRAÇÃO (TOP GRAPHICS - F-14 TOMCAT)")
         print("=" * 76)
         print(" [W / S]               : Potência (Throttle) / Segure 'S' no convés para Frear")
         print(" [E]                   : Ligar / Desligar Pós-Combustor (Afterburner Boost)")
@@ -212,8 +213,10 @@ class TopGraphicsApp:
                 throttle_in -= 1.0
                 brake_active = True
 
-            # Atualiza cinemática, afterburner, trem de pouso e colisões do F-14
+            # Atualiza cinemática, afterburner, trem de pouso, teleporte Roundabout e colisões
             self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
+            # Sincroniza a Chase Cam caso o caça tenha cruzado a borda do mapa neste frame
+            self.camera.apply_wrap_delta(self.player.last_wrap_delta)
 
             # Atualiza título da janela com estado do voo, trem de pouso, afterburner e alertas
             if self.player.crashed:
@@ -227,7 +230,7 @@ class TopGraphicsApp:
                     f"Alt: {self.player.pos[1] * 10:.0f} ft | Trem(Q): {gear_str} | AB(E): {ab_str} | "
                     f"Asas(G): {self.player.wing_sweep_angle:.0f}° | Cam: {self.camera.mode}"
                 )
-            glfw.set_window_title(window, f"Top Graphics v2 | {title_status}")
+            glfw.set_window_title(window, f"Top Graphics | {title_status}")
 
             width, height = glfw.get_framebuffer_size(window)
             height = max(1, height)
@@ -248,13 +251,12 @@ class TopGraphicsApp:
 
             self.camera.apply(self.player, dt)
 
-            # 1. Domo de Horizonte Crepuscular + Disco Solar e Halos (sem escrita no Z-buffer)
+            # 1. Domo de Horizonte Crepuscular + Disco Solar e Halos
             draw_rising_sun_and_sky(self.player.pos, sun_state, self.scene_mode)
 
             # Reaplica a posição da luz direcional do Sol (GL_LIGHT0) no espaço de mundo atual
             if self.lighting_enabled:
                 apply_sunrise_lighting(sun_state, True)
-                # Luz pontual laranja (GL_LIGHT1) brilha quando o Afterburner está ativo
                 if self.player.afterburner and self.player.throttle > 0.02 and not self.player.crashed:
                     glEnable(GL_LIGHT1)
                     afterburner_pos = self.player.pos - self.player.forward * 5.5
@@ -272,12 +274,12 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
-            # 2. Geometria Opaca do Cenário (Oceano + CVN-65 ou Cânion Procedural)
+            # 2. Geometria Opaca do Cenário com Instanciação Periódica ("Roundabout" / Pac-Man)
             if self.scene_mode == 1:
-                glCallList(scene1_list)
+                draw_periodic_scene(scene1_list, self.player.pos, scene_mode=1)
                 draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
             else:
-                glCallList(scene2_list)
+                draw_periodic_scene(scene2_list, self.player.pos, scene_mode=2)
 
             if self.textures_enabled:
                 glEnable(GL_TEXTURE_2D)
@@ -288,10 +290,12 @@ class TopGraphicsApp:
             if self.camera.mode != 2:
                 draw_f14_complete(self.player, player_fuselage_list, wing_tex, sim_time)
 
-            # 4. Nuvens Procedurais de Vapor Semitransparente (Renderizadas APÓS objetos opacos
-            #    com glDepthMask(GL_FALSE) para nunca bloquear o caça ou criar bordas duras)
+            # 4. Nuvens Procedurais de Vapor Semitransparente (também periódicas no Roundabout)
             active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
-            draw_procedural_clouds(active_clouds, cloud_vapor_tex, sim_time)
+            draw_procedural_clouds(
+                active_clouds, cloud_vapor_tex, sim_time,
+                player_pos=self.player.pos, scene_mode=self.scene_mode
+            )
 
             # 5. Overlays 2D (HUD do Cockpit e Alerta de Colisão)
             if self.camera.mode == 2:

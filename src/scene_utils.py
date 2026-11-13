@@ -1,19 +1,18 @@
 """
 ================================================================================
 TopGraphics | scene_utils.py
-Utilitários compartilhados de ambiente e atmosfera para os cenários (Cena 1 e Cena 2):
-  1. Sistema de Nascer do Sol (Rising Sun): abóbada celeste esférica completa (0° a 90°
-     até o zênite), disco solar com múltiplos halos de difração atmosférica, reflexo 
-     especular no mar e atualização dinâmica da iluminação direcional (GL_LIGHT0).
-  2. Nuvens Procedurais Volumétricas (Vapor Semitransparente): textura RGBA gerada via
-     ruído fractal trigonométrico (fBm) com decaimento radial gaussiano e renderização
-     em camadas sem escrita no Z-Buffer (glDepthMask(GL_FALSE)), garantindo aspecto de
-     vapor real ao redor e através do caça F-14.
+Utilitários compartilhados de ambiente, atmosfera e mundo periódico ("Roundabout"):
+  1. Sistema de Mundo Infinito / Roundabout (Toroide):
+     - Teleporta suavemente o caça para a borda oposta ao cruzar os limites (X, Z)
+       e renderiza as cópias periódicas adjacentes da Display List da cena logo à
+       frente do jogador, criando a ilusão perfeita de volta ao mundo sem bordas.
+  2. Sistema de Nascer do Sol (Rising Sun) Otimizado com Display List:
+     - Abóbada celeste esférica completa (-90° a +90°), disco solar e halos compilados
+       em Display List (atualizada a cada 0.5s), eliminando gargalos de CPU em Python.
+  3. Nuvens Procedurais Volumétricas (Vapor Semitransparente) distribuídas por todo
+     o domínio periódico de cada mapa.
 ================================================================================
 """
-
-# TODO: render more of the map as needed or implement a visual map boundary (maybe create more map and implement a fake roundabout around the world, teleporting user to the other border)
-# TODO: check optimization after
 
 import math
 import numpy as np
@@ -23,7 +22,152 @@ from math_utils import normalize
 
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO DO NASCER DO SOL (RISING SUN) E ATMOSFERA
+# 0. CONSTANTES E FUNÇÕES DO MUNDO PERIÓDICO ("ROUNDABOUT")
+# ==============================================================================
+
+# Cena 1 (Oceano + Porta-Aviões CVN-65): domínio [-2400, +2400] em X e Z (período = 4800m)
+SCENE1_X_MIN = -2400.0
+SCENE1_X_MAX =  2400.0
+SCENE1_SPAN_X = SCENE1_X_MAX - SCENE1_X_MIN   # 4800.0
+
+SCENE1_Z_MIN = -2400.0
+SCENE1_Z_MAX =  2400.0
+SCENE1_SPAN_Z = SCENE1_Z_MAX - SCENE1_Z_MIN   # 4800.0
+
+# Cena 2 (Cânion Procedural): domínio [-360, +360] em X (720m) e [-1500, +500] em Z (2000m)
+SCENE2_X_MIN = -360.0
+SCENE2_X_MAX =  360.0
+SCENE2_SPAN_X = SCENE2_X_MAX - SCENE2_X_MIN   # 720.0
+
+SCENE2_Z_MIN = -1500.0
+SCENE2_Z_MAX =   500.0
+SCENE2_SPAN_Z = SCENE2_Z_MAX - SCENE2_Z_MIN   # 2000.0
+
+# Distância de visibilidade da câmera (zFar = 3500.0 no gluPerspective)
+WORLD_VIEW_DISTANCE = 3450.0
+
+
+def get_scene_bounds(scene_mode):
+    """Retorna (x_min, x_max, span_x, z_min, z_max, span_z) para o cenário ativo."""
+    if scene_mode == 1:
+        return (
+            SCENE1_X_MIN, SCENE1_X_MAX, SCENE1_SPAN_X,
+            SCENE1_Z_MIN, SCENE1_Z_MAX, SCENE1_SPAN_Z,
+        )
+    return (
+        SCENE2_X_MIN, SCENE2_X_MAX, SCENE2_SPAN_X,
+        SCENE2_Z_MIN, SCENE2_Z_MAX, SCENE2_SPAN_Z,
+    )
+
+
+def wrap_position_roundabout(pos, scene_mode):
+    """
+    Aplica o teleporte toroidal (Roundabout) na posição 3D da aeronave
+    quando ela ultrapassa os limites (X ou Z) do mapa.
+    Retorna o vetor 'wrap_delta' (deslocamento aplicado), que também deve ser
+    somado à Chase Cam para que a câmera acompanhe o teleporte sem nenhum salto visual.
+    """
+    x_min, x_max, span_x, z_min, z_max, span_z = get_scene_bounds(scene_mode)
+    old_x = float(pos[0])
+    old_z = float(pos[2])
+
+    new_x = old_x
+    new_z = old_z
+
+    if old_x < x_min:
+        new_x = ((old_x - x_min) % span_x) + x_min
+    elif old_x >= x_max:
+        new_x = ((old_x - x_min) % span_x) + x_min
+
+    if old_z < z_min:
+        new_z = ((old_z - z_min) % span_z) + z_min
+    elif old_z >= z_max:
+        new_z = ((old_z - z_min) % span_z) + z_min
+
+    dx = new_x - old_x
+    dz = new_z - old_z
+
+    if abs(dx) > 1e-3 or abs(dz) > 1e-3:
+        pos[0] = new_x
+        pos[2] = new_z
+        return np.array([dx, 0.0, dz], dtype=np.float32)
+
+    return np.zeros(3, dtype=np.float32)
+
+
+def _interval_distance(val, vmin, vmax):
+    """Distância mínima de uma coordenada escalar 'val' até o intervalo [vmin, vmax]."""
+    if val < vmin:
+        return vmin - val
+    if val > vmax:
+        return val - vmax
+    return 0.0
+
+
+def get_visible_periodic_offsets(player_pos, scene_mode):
+    """
+    Determina quais cópias periódicas (tiles vizinhos) do mapa estão dentro do
+    alcance visual da câmera (WORLD_VIEW_DISTANCE) a partir de 'player_pos'.
+    Assim, antes mesmo do caça cruzar a fronteira do mapa, o lado oposto já está
+    renderizado logo à sua frente!
+    """
+    x_min, x_max, span_x, z_min, z_max, span_z = get_scene_bounds(scene_mode)
+    px, py, pz = float(player_pos[0]), float(player_pos[1]), float(player_pos[2])
+
+    if scene_mode == 1:
+        # Na Cena 1 (span = 4800m), avalia a vizinhança 3x3 e desenha apenas os tiles
+        # cuja borda está dentro do raio de visão de 3450m.
+        offsets = []
+        for ix in (-1, 0, 1):
+            tx_min = x_min + ix * span_x
+            tx_max = x_max + ix * span_x
+            dx = _interval_distance(px, tx_min, tx_max)
+            if dx > WORLD_VIEW_DISTANCE:
+                continue
+            for iz in (-1, 0, 1):
+                tz_min = z_min + iz * span_z
+                tz_max = z_max + iz * span_z
+                dz = _interval_distance(pz, tz_min, tz_max)
+                if math.hypot(dx, dz) <= WORLD_VIEW_DISTANCE:
+                    offsets.append((ix * span_x, iz * span_z))
+        return offsets
+
+    # Na Cena 2 (Cânion: span_z = 2000m, span_x = 720m):
+    # Sempre desenha o tile atual (iz = 0) e os vizinhos frontal/traseiro (iz = -1, +1)
+    # para que o corredor de 6000m nunca tenha fim visível.
+    # Nos lados (ix = -1, +1), só precisa instanciar se o caça subir acima dos paredões
+    # (py > 90m) ou se afastar lateralmente do centro do cânion (|px| > 150m).
+    if py > 90.0 or abs(px) > 150.0:
+        x_indices = (-1, 0, 1)
+    else:
+        x_indices = (0,)
+
+    offsets = []
+    for ix in x_indices:
+        for iz in (-1, 0, 1):
+            offsets.append((ix * span_x, iz * span_z))
+    return offsets
+
+
+def draw_periodic_scene(scene_dlist, player_pos, scene_mode):
+    """
+    Renderiza a Display List do cenário no tile principal (0, 0) e nas cópias
+    periódicas adjacentes visíveis, garantindo continuidade visual 100% sem costuras
+    no efeito Roundabout (Pac-Man).
+    """
+    offsets = get_visible_periodic_offsets(player_pos, scene_mode)
+    for ox, oz in offsets:
+        if abs(ox) < 1e-3 and abs(oz) < 1e-3:
+            glCallList(scene_dlist)
+        else:
+            glPushMatrix()
+            glTranslatef(ox, 0.0, oz)
+            glCallList(scene_dlist)
+            glPopMatrix()
+
+
+# ==============================================================================
+# 1. CONFIGURAÇÃO DO NASCER DO SOL (RISING SUN) E ATMOSFERA (COM CACHE DE GPU)
 # ==============================================================================
 
 SKY_DOME_RADIUS = 2200.0        # Raio da abóbada celeste esférica (dentro do zFar = 3500)
@@ -33,37 +177,29 @@ SUN_RISE_DURATION = 240.0       # Tempo (s) para o sol subir da aurora até a ma
 SUN_MIN_ELEV_DEG = 4.5          # Elevação inicial (rasante ao horizonte no início do voo)
 SUN_MAX_ELEV_DEG = 26.0         # Elevação máxima após o ciclo de subida
 
+# Cache interno de Display List para o Sky Dome (evita recalcular 800+ vértices em Python a cada frame)
+_sky_dome_cache = {
+    "dlist": None,
+    "last_key": None,
+}
+
 
 def get_sun_state(sim_time, scene_mode=1):
     """
     Calcula a progressão contínua do nascer do sol em função de 'sim_time'.
-    Retorna um dicionário com:
-      - 'dir': vetor unitário apontando para o Sol (x, y, z)
-      - 'progress': fração [0.0, 1.0] da subida solar
-      - 'zenith_color': cor RGB do topo do céu (90 graus)
-      - 'upper_sky_color': cor RGB da atmosfera superior
-      - 'mid_sky_color': cor RGB da faixa intermediária crepuscular
-      - 'horizon_color': cor RGB da faixa do horizonte (0 graus)
-      - 'sun_core_color': cor RGB do núcleo solar
-      - 'sun_halo_color': cor RGB da coroa luminosa
-      - 'light_ambient', 'light_diffuse', 'light_specular': parâmetros para GL_LIGHT0
     """
-    # Progressão suave entre 0.0 (alvorada rasante) e 1.0 (manhã dourada)
     progress = min(1.0, max(0.0, sim_time / SUN_RISE_DURATION))
-    # Curva suave (smoothstep)
     t = progress * progress * (3.0 - 2.0 * progress)
 
     elev_deg = SUN_MIN_ELEV_DEG + t * (SUN_MAX_ELEV_DEG - SUN_MIN_ELEV_DEG)
     elev_rad = math.radians(elev_deg)
 
-    # Vetor unitário apontando do centro da cena para o Sol no horizonte frontal (-Z)
     sx = math.cos(elev_rad) * math.sin(SUN_AZIMUTH_RAD)
     sy = math.sin(elev_rad)
     sz = -math.cos(elev_rad) * math.cos(SUN_AZIMUTH_RAD)
     sun_dir = normalize(np.array([sx, sy, sz], dtype=np.float32))
 
     if scene_mode == 1:
-        # Cena 1 (Oceano + CVN-65): transição de azul-noite/índigo no zênite até laranja/dourado no horizonte
         zenith_dawn = np.array([0.08, 0.14, 0.34], dtype=np.float32)
         zenith_day  = np.array([0.18, 0.38, 0.72], dtype=np.float32)
         upper_dawn  = np.array([0.16, 0.24, 0.48], dtype=np.float32)
@@ -73,7 +209,6 @@ def get_sun_state(sim_time, scene_mode=1):
         horiz_dawn  = np.array([0.92, 0.44, 0.24], dtype=np.float32)
         horiz_day   = np.array([0.96, 0.76, 0.52], dtype=np.float32)
     else:
-        # Cena 2 (Cânion): tons mais quentes de deserto / âmbar na alvorada e índigo profundo no topo
         zenith_dawn = np.array([0.12, 0.13, 0.30], dtype=np.float32)
         zenith_day  = np.array([0.24, 0.38, 0.66], dtype=np.float32)
         upper_dawn  = np.array([0.24, 0.20, 0.40], dtype=np.float32)
@@ -91,7 +226,6 @@ def get_sun_state(sim_time, scene_mode=1):
     sun_core = np.array([1.0, 0.92 + 0.06 * t, 0.72 + 0.20 * t], dtype=np.float32)
     sun_halo = (1.0 - t) * np.array([1.0, 0.38, 0.14], dtype=np.float32) + t * np.array([1.0, 0.72, 0.32], dtype=np.float32)
 
-    # Cores da luz direcional GL_LIGHT0 que banham o F-14, o porta-aviões e as rochas
     light_ambient = [
         float(0.24 + 0.10 * t),
         float(0.20 + 0.12 * t),
@@ -115,6 +249,7 @@ def get_sun_state(sim_time, scene_mode=1):
         "dir": sun_dir,
         "progress": t,
         "elev_deg": elev_deg,
+        "scene_mode": scene_mode,
         "zenith_color": zenith_color,
         "upper_sky_color": upper_sky_color,
         "mid_sky_color": mid_sky_color,
@@ -129,8 +264,7 @@ def get_sun_state(sim_time, scene_mode=1):
 
 def apply_sunrise_lighting(sun_state, lighting_enabled=True):
     """
-    Atualiza a cor de fundo (glClearColor) usando a cor do zênite (evitando qualquer
-    fundo bege caso haja falha de preenchimento) e configura a fonte direcional GL_LIGHT0.
+    Atualiza a cor de fundo (glClearColor) usando a cor do zênite e configura GL_LIGHT0.
     """
     zc = sun_state["zenith_color"]
     glClearColor(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
@@ -138,7 +272,6 @@ def apply_sunrise_lighting(sun_state, lighting_enabled=True):
     if lighting_enabled:
         glEnable(GL_LIGHTING)
         sdir = sun_state["dir"]
-        # w = 0.0 define fonte direcional (raios paralelos vindos da direção do Sol)
         glLightfv(GL_LIGHT0, GL_POSITION, [float(sdir[0]), float(sdir[1]), float(sdir[2]), 0.0])
         glLightfv(GL_LIGHT0, GL_AMBIENT, sun_state["light_ambient"])
         glLightfv(GL_LIGHT0, GL_DIFFUSE, sun_state["light_diffuse"])
@@ -151,8 +284,6 @@ def _compute_sky_dome_vertex_color(elev_deg, azim_sin, azim_cos, sun_state):
     """
     Calcula a cor exata (r, g, b) de um vértice da abóbada celeste esférica
     para a elevação 'elev_deg' (-30° a +90°) e direção azimutal (azim_sin, azim_cos).
-    Garante transição contínua desde o horizonte até o polo superior (zênite = 90°),
-    zerando a influência direcional do sol no topo para não criar costuras no polo.
     """
     hc = sun_state["horizon_color"]
     mc = sun_state["mid_sky_color"]
@@ -161,27 +292,21 @@ def _compute_sky_dome_vertex_color(elev_deg, azim_sin, azim_cos, sun_state):
     sdir = sun_state["dir"]
 
     if elev_deg <= 0.0:
-        # Abaixo da linha do horizonte (saia inferior da esfera)
         t_sub = np.clip(-elev_deg / 30.0, 0.0, 1.0)
         base_col = (1.0 - t_sub) * hc + t_sub * (0.45 * hc + 0.55 * zc)
     elif elev_deg <= 14.0:
-        # Faixa 1: Horizonte incandescente (0° -> 14°)
         u = elev_deg / 14.0
         base_col = (1.0 - u) * hc + u * mc
     elif elev_deg <= 38.0:
-        # Faixa 2: Transição crepuscular (14° -> 38°)
         u = (elev_deg - 14.0) / (38.0 - 14.0)
         base_col = (1.0 - u) * mc + u * uc
     else:
-        # Faixa 3: Atmosfera superior até o Zênite profundo no topo (38° -> 90°)
         u = (elev_deg - 38.0) / (90.0 - 38.0)
         u_smooth = u * u * (3.0 - 2.0 * u)
         base_col = (1.0 - u_smooth) * uc + u_smooth * zc
 
-    # Brilho azimutal na direção do Sol (decai suavemente com a elevação até zerar acima de 55°)
     elev_atten = max(0.0, 1.0 - max(0.0, elev_deg) / 55.0) ** 2.0
     if elev_atten > 1e-4:
-        # Direção horizontal unitária do vértice: (vx, vz) = (sin(ang), -cos(ang))
         horiz_dot = max(0.0, azim_sin * float(sdir[0]) + (-azim_cos) * float(sdir[2]))
         glow_boost = (horiz_dot ** 3.0) * 0.34 * elev_atten
         r = min(1.0, float(base_col[0]) + glow_boost)
@@ -192,41 +317,26 @@ def _compute_sky_dome_vertex_color(elev_deg, azim_sin, azim_cos, sun_state):
     return float(base_col[0]), float(base_col[1]), float(base_col[2])
 
 
-def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
+def _compile_sky_dome_display_list(sun_state):
     """
-    Renderiza a abóbada celeste esférica completa (Sky Dome de -30° até +90° no zênite),
-    fechando totalmente o topo do céu sem buracos ou cortes, acompanhando a posição
-    (X, Y, Z) da aeronave para nunca ser clipada pelo plano Far da perspectiva.
+    Compila a geometria da abóbada celeste e do disco solar em uma Display List.
+    Só é chamada quando o Sol se move significativamente (~a cada 0.5s) ou ao trocar de cena.
     """
-    glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
-    glDisable(GL_LIGHTING)
-    glDisable(GL_TEXTURE_2D)
-    glDisable(GL_DEPTH_TEST)
-    glDepthMask(GL_FALSE)
-    glEnable(GL_BLEND)
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+    if _sky_dome_cache["dlist"] is None:
+        _sky_dome_cache["dlist"] = glGenLists(1)
 
-    cx = float(anchor_pos[0])
-    cy = float(anchor_pos[1])
-    cz = float(anchor_pos[2])
+    dlist = _sky_dome_cache["dlist"]
+    glNewList(dlist, GL_COMPILE)
 
     sc = sun_state["sun_core_color"]
     sh = sun_state["sun_halo_color"]
     zc = sun_state["zenith_color"]
     sdir = sun_state["dir"]
 
-    segments = 40
-    # Anéis de latitude (em graus) cobrindo de abaixo do horizonte (-30°) até quase o polo (+82°),
-    # seguidos de uma calota polar (GL_TRIANGLE_FAN) até exatamente +90° (Zênite).
-    lat_rings_deg = [-30.0, -10.0, 0.0, 5.0, 11.0, 18.0, 27.0, 38.0, 52.0, 68.0, 82.0]
+    segments = 32
+    lat_rings_deg = [-30.0, -10.0, 0.0, 6.0, 13.0, 22.0, 35.0, 52.0, 70.0, 83.0]
 
-    glPushMatrix()
-    # Centraliza o domo nas coordenadas (X, Y, Z) do caça para manter o horizonte e o topo
-    # sempre a uma distância constante SKY_DOME_RADIUS (< zFar) em qualquer altitude.
-    glTranslatef(cx, cy, cz)
-
-    # 1. Faixas Esféricas de Latitude da Abóbada Celeste (-30° até +82°)
+    # 1. Faixas Esféricas de Latitude (-30° até +83°)
     for r_idx in range(len(lat_rings_deg) - 1):
         lat1_deg = lat_rings_deg[r_idx]
         lat2_deg = lat_rings_deg[r_idx + 1]
@@ -253,14 +363,13 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
             glVertex3f(r2 * sa, y2, -r2 * ca)
         glEnd()
 
-    # 2. Calota Superior do Zênite (+82° até +90° exatos no topo da esfera)
+    # 2. Calota Superior do Zênite (+83° até +90°)
     top_ring_deg = lat_rings_deg[-1]
     top_ring_rad = math.radians(top_ring_deg)
     y_ring = SKY_DOME_RADIUS * math.sin(top_ring_rad)
     r_ring = SKY_DOME_RADIUS * math.cos(top_ring_rad)
 
     glBegin(GL_TRIANGLE_FAN)
-    # Vértice central no Polo Superior (0, SKY_DOME_RADIUS, 0) com a cor pura do zênite
     glColor4f(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
     glVertex3f(0.0, SKY_DOME_RADIUS, 0.0)
     for i in range(segments + 1):
@@ -272,7 +381,7 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
         glVertex3f(r_ring * sa, y_ring, -r_ring * ca)
     glEnd()
 
-    # 3. Calota Inferior (-30° até -90°) para evitar buracos em mergulhos verticais/loopings
+    # 3. Calota Inferior (-30° até -90°)
     bot_ring_deg = lat_rings_deg[0]
     bot_ring_rad = math.radians(bot_ring_deg)
     y_bot_ring = SKY_DOME_RADIUS * math.sin(bot_ring_rad)
@@ -291,13 +400,12 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
         glVertex3f(r_bot_ring * sa, y_bot_ring, -r_bot_ring * ca)
     glEnd()
 
-    # 4. Disco Solar e Coroas de Difração (Billboard alinhado ao vetor do Sol)
+    # 4. Disco Solar e Coroas de Difração
     sun_pos = sdir * SUN_DISTANCE
     up_world = np.array([0.0, 1.0, 0.0], dtype=np.float32)
     sun_right = normalize(np.cross(sdir, up_world))
     sun_up = normalize(np.cross(sun_right, sdir))
 
-    # Desenha 4 camadas concêntricas de halo (do brilho atmosférico amplo até o núcleo solar)
     halo_layers = [
         (560.0, 0.0,  [sh[0], sh[1] * 0.75, sh[2] * 0.5, 0.22]),
         (300.0, 0.0,  [sh[0], sh[1],        sh[2],       0.38]),
@@ -305,7 +413,7 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
         ( 76.0, 0.96, [sc[0], sc[1],        sc[2],       0.98]),
     ]
 
-    fan_segs = 28
+    fan_segs = 24
     for radius, center_alpha_boost, rgba in halo_layers:
         glBegin(GL_TRIANGLE_FAN)
         if center_alpha_boost > 0.5:
@@ -314,7 +422,6 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
             glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]), float(rgba[3]))
         glVertex3f(float(sun_pos[0]), float(sun_pos[1]), float(sun_pos[2]))
 
-        # Borda externa do halo decai suavemente para alpha = 0 (exceto o disco central)
         edge_alpha = 0.85 if center_alpha_boost > 0.8 else 0.0
         glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]), edge_alpha)
         for i in range(fan_segs + 1):
@@ -324,7 +431,34 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
             glVertex3f(float(pt[0]), float(pt[1]), float(pt[2]))
         glEnd()
 
+    glEndList()
+
+
+def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
+    """
+    Renderiza a abóbada celeste esférica completa usando Display List em cache,
+    centrada em (X, Y, Z) da aeronave.
+    """
+    # Atualiza o cache apenas quando a elevação solar muda em ~0.1 grau ou muda o cenário
+    cache_key = (scene_mode, int(round(sun_state["elev_deg"] * 10.0)))
+    if _sky_dome_cache["last_key"] != cache_key or _sky_dome_cache["dlist"] is None:
+        _compile_sky_dome_display_list(sun_state)
+        _sky_dome_cache["last_key"] = cache_key
+
+    glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
+    glDisable(GL_LIGHTING)
+    glDisable(GL_TEXTURE_2D)
+    glDisable(GL_DEPTH_TEST)
+    glDepthMask(GL_FALSE)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
+
+    glPushMatrix()
+    glTranslatef(float(anchor_pos[0]), float(anchor_pos[1]), float(anchor_pos[2]))
+    glCallList(_sky_dome_cache["dlist"])
     glPopMatrix()
+
     glPopAttrib()
 
 
@@ -344,21 +478,19 @@ def draw_ocean_sun_glitter(anchor_pos, sun_state, sim_time):
     sh = sun_state["sun_halo_color"]
     sc = sun_state["sun_core_color"]
 
-    # Direção horizontal no plano XZ em direção ao Sol
     horiz_dir = normalize(np.array([sdir[0], 0.0, sdir[2]], dtype=np.float32))
     perp_dir = np.array([-horiz_dir[2], 0.0, horiz_dir[0]], dtype=np.float32)
 
     base_x = float(anchor_pos[0])
     base_z = float(anchor_pos[2])
 
-    # Faixas cintilantes ao longo do caminho entre o porta-aviões/caça e o horizonte solar
-    num_strips = 26
+    num_strips = 22
     glBegin(GL_QUADS)
     for i in range(num_strips):
-        dist = 160.0 + i * 85.0
+        dist = 160.0 + i * 95.0
         shimmer = 0.75 + 0.25 * math.sin(sim_time * 3.8 + i * 1.7)
-        half_w = (12.0 + i * 5.2) * shimmer
-        depth_l = 28.0 + i * 2.5
+        half_w = (12.0 + i * 5.5) * shimmer
+        depth_l = 28.0 + i * 2.8
 
         center = np.array([base_x, 0.18, base_z], dtype=np.float32) + horiz_dir * dist
         p1 = center - perp_dir * half_w - horiz_dir * depth_l
@@ -378,14 +510,12 @@ def draw_ocean_sun_glitter(anchor_pos, sun_state, sim_time):
 
 
 # ==============================================================================
-# 2. NUVENS PROCEDURAIS (VAPOR SEMITRANSPARENTE, NÃO SÓLIDO)
+# 2. NUVENS PROCEDURAIS (VAPOR SEMITRANSPARENTE COM SUPORTE PERIÓDICO)
 # ==============================================================================
 
 def create_cloud_vapor_texture():
     """
     Gera proceduralmente uma textura RGBA 128x128 de vapor de nuvem semitransparente.
-    Usa soma de harmônicos trigonométricos (fBm) modulada por um envelope radial
-    gaussiano suave para que as bordas tenham alpha = 0 (zero quinas visíveis).
     """
     size = 128
     img = np.zeros((size, size, 4), dtype=np.uint8)
@@ -394,12 +524,9 @@ def create_cloud_vapor_texture():
     ys = np.linspace(-1.0, 1.0, size, dtype=np.float32)
     xv, yv = np.meshgrid(xs, ys)
 
-    # Distância radial ao quadrado a partir do centro da textura
     r2 = xv * xv + yv * yv
-    # Envelope suave que zera completamente em r >= 0.95
     radial_mask = np.clip(1.0 - r2 / 0.90, 0.0, 1.0) ** 2.2
 
-    # Turbulência fractal suave (3 oitavas trigonométricas)
     turb = (
         0.50 * np.sin(xv * 3.8 + np.cos(yv * 3.2))
         + 0.30 * np.cos(yv * 6.5 - np.sin(xv * 5.8))
@@ -408,7 +535,6 @@ def create_cloud_vapor_texture():
     density = np.clip(0.68 + 0.32 * turb, 0.15, 1.0)
     alpha_f = radial_mask * density
 
-    # Gradiente sutil de iluminação interna no puff de vapor
     shade = np.clip(238 + 17 * (0.35 - yv), 210, 255).astype(np.uint8)
 
     img[:, :, 0] = shade
@@ -428,14 +554,10 @@ def create_cloud_vapor_texture():
 
 def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
     """
-    Compila um banco de nuvem individual usando planos de vapor cruzados e levemente
-    inclinados em múltiplas camadas horizontais e oblíquas.
-    Como a textura RGBA tem bordas gaussianas transparentes e glDepthMask(GL_FALSE)
-    está ativo na renderização, o resultado visual é uma névoa/vapor tridimensional
-    suave que pode ser atravessada pelo F-14 sem parecer um objeto sólido.
+    Compila um banco de nuvem individual usando planos de vapor cruzados.
     """
-    num_wisps = 9
-    for k in range(num_wisps):
+    num_wisps = 8
+    for _ in range(num_wisps):
         ox = float(rng.uniform(-0.48, 0.48) * rx)
         oy = float(rng.uniform(-0.35, 0.45) * ry)
         oz = float(rng.uniform(-0.48, 0.48) * rz)
@@ -449,16 +571,12 @@ def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
         tilt_x = float(rng.uniform(-14.0, 14.0))
         tilt_z = float(rng.uniform(-14.0, 14.0))
 
-        # Base da nuvem recebe iluminação alaranjada/rosada do nascer do sol;
-        # topo da nuvem é mais claro/creme
         height_factor = (oy / max(1.0, ry)) + 0.5
         if height_factor < 0.42:
-            # Brilho inferior do sol nascente (Golden/Rose underside)
             glColor4f(1.0, 0.74, 0.58, 0.34)
         elif height_factor < 0.72:
             glColor4f(0.99, 0.88, 0.78, 0.38)
         else:
-            # Topo iluminado
             glColor4f(1.0, 0.96, 0.92, 0.42)
 
         glPushMatrix()
@@ -468,19 +586,16 @@ def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
         glRotatef(tilt_z, 0.0, 0.0, 1.0)
 
         glBegin(GL_QUADS)
-        # 1. Camada horizontal principal de vapor
         glTexCoord2f(0.0, 0.0); glVertex3f(-pw, 0.0, -pl)
         glTexCoord2f(1.0, 0.0); glVertex3f( pw, 0.0, -pl)
         glTexCoord2f(1.0, 1.0); glVertex3f( pw, 0.0,  pl)
         glTexCoord2f(0.0, 1.0); glVertex3f(-pw, 0.0,  pl)
 
-        # 2. Camada oblíqua longitudinal (dá volume quando visto de frente/trás em voo nivelado)
         glTexCoord2f(0.0, 0.0); glVertex3f(-pw * 0.85, -ph, -pl * 0.45)
         glTexCoord2f(1.0, 0.0); glVertex3f( pw * 0.85, -ph, -pl * 0.45)
         glTexCoord2f(1.0, 1.0); glVertex3f( pw * 0.85,  ph,  pl * 0.45)
         glTexCoord2f(0.0, 1.0); glVertex3f(-pw * 0.85,  ph,  pl * 0.45)
 
-        # 3. Camada oblíqua transversal (dá volume quando visto de lado)
         glTexCoord2f(0.0, 0.0); glVertex3f(-pw * 0.45, -ph, -pl * 0.85)
         glTexCoord2f(1.0, 0.0); glVertex3f(-pw * 0.45, -ph,  pl * 0.85)
         glTexCoord2f(1.0, 1.0); glVertex3f( pw * 0.45,  ph,  pl * 0.85)
@@ -492,8 +607,8 @@ def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
 
 def build_procedural_clouds_list(scene_mode=1):
     """
-    Compila uma Display List contendo dezenas de formações de nuvens procedurais
-    distribuídas pelo espaço 3D do cenário (sem colisão e sem escrita no Z-buffer).
+    Compila uma Display List contendo formações de nuvens procedurais distribuídas
+    por todo o domínio periódico do cenário.
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
@@ -501,12 +616,10 @@ def build_procedural_clouds_list(scene_mode=1):
     rng = np.random.default_rng(101 if scene_mode == 1 else 202)
 
     if scene_mode == 1:
-        # Cena 1 (Oceano + Porta-Aviões): bancos de nuvens marítimas entre 85m e 260m de altitude
         num_clusters = 52
         for _ in range(num_clusters):
-            cx = float(rng.uniform(-1850.0, 1850.0))
-            cz = float(rng.uniform(-2100.0, 1450.0))
-            # Evita colocar nuvens muito baixas exatamente sobre a pista do porta-aviões
+            cx = float(rng.uniform(SCENE1_X_MIN + 150.0, SCENE1_X_MAX - 150.0))
+            cz = float(rng.uniform(SCENE1_Z_MIN + 150.0, SCENE1_Z_MAX - 150.0))
             if abs(cx) < 180.0 and abs(cz) < 280.0:
                 cy = float(rng.uniform(135.0, 240.0))
             else:
@@ -518,31 +631,25 @@ def build_procedural_clouds_list(scene_mode=1):
             _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng)
 
     else:
-        # Cena 2 (Cânion Procedural): bancos de neblina alta sobre os paredões rochosos
-        # e nuvens esparsas ao longo do corredor de voo
-        num_clusters = 44
+        num_clusters = 40
         for _ in range(num_clusters):
-            cz = float(rng.uniform(-1450.0, 480.0))
-            cx = float(rng.uniform(-420.0, 420.0))
+            cz = float(rng.uniform(SCENE2_Z_MIN + 60.0, SCENE2_Z_MAX - 60.0))
+            cx = float(rng.uniform(SCENE2_X_MIN + 40.0, SCENE2_X_MAX - 40.0))
             cy = float(rng.uniform(115.0, 235.0))
 
-            rx = float(rng.uniform(65.0, 140.0))
+            rx = float(rng.uniform(65.0, 135.0))
             ry = float(rng.uniform(15.0, 32.0))
-            rz = float(rng.uniform(65.0, 140.0))
+            rz = float(rng.uniform(65.0, 135.0))
             _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng)
 
     glEndList()
     return dlist
 
 
-def draw_procedural_clouds(clouds_dlist, cloud_tex_id, sim_time):
+def draw_procedural_clouds(clouds_dlist, cloud_tex_id, sim_time, player_pos=None, scene_mode=1):
     """
-    Renderiza a camada de nuvens procedurais como vapor semitransparente:
-      - Desativa escrita no Depth Buffer (glDepthMask(GL_FALSE)) mantendo o teste
-        de profundidade ativo (GL_DEPTH_TEST), para que o F-14 e as montanhas
-        ocultem corretamente o vapor atrás deles, mas o vapor nunca crie recortes
-        sólidos nem bloqueie objetos.
-      - Aplica deriva suave de vento ao longo do tempo (sim_time).
+    Renderiza a camada de nuvens procedurais como vapor semitransparente, repetindo
+    também nos tiles periódicos visíveis para manter continuidade no Roundabout.
     """
     glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
     glDisable(GL_LIGHTING)
@@ -555,13 +662,18 @@ def draw_procedural_clouds(clouds_dlist, cloud_tex_id, sim_time):
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL)
 
-    # Movimento suave de deriva pelo vento
     drift_x = math.sin(sim_time * 0.015) * 35.0
     drift_z = (sim_time * 3.2) % 400.0 - 200.0
 
-    glPushMatrix()
-    glTranslatef(drift_x, 0.0, drift_z)
-    glCallList(clouds_dlist)
-    glPopMatrix()
+    if player_pos is not None:
+        offsets = get_visible_periodic_offsets(player_pos, scene_mode)
+    else:
+        offsets = [(0.0, 0.0)]
+
+    for ox, oz in offsets:
+        glPushMatrix()
+        glTranslatef(ox + drift_x, 0.0, oz + drift_z)
+        glCallList(clouds_dlist)
+        glPopMatrix()
 
     glPopAttrib()

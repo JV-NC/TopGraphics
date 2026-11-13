@@ -2,17 +2,20 @@
 ================================================================================
 TopGraphics | flight_kinematics.py
 Cinemática de voo 6-DOF sem Gimbal Lock (base ortonormal local F, U, R + Rodrigues),
-modo solo no convés, pós-combustor (afterburner), arrasto do trem de pouso e colisão.
+modo solo no convés, pós-combustor (afterburner), arrasto do trem de pouso,
+colisão e mundo periódico ("Roundabout" / Pac-Man).
 ================================================================================
 """
 
 # TODO: implement maximum speeds and accelerations more consistent with the actual F-14 (1342 kt max)
+# TODO: check method to simulate/feel g-force on sharp turns
 
 import math
 
 import numpy as np
 
 from math_utils import normalize
+from scene_utils import wrap_position_roundabout
 from scene_canyon import (
     canyon_height_func,
     canyon_center_x,
@@ -82,6 +85,9 @@ class Aircraft:
         self.crash_reason = ""
         self.crash_timer = 0.0
 
+        # Deslocamento de teleporte toroidal ocorrido no último frame (para sincronizar a Chase Cam)
+        self.last_wrap_delta = np.zeros(3, dtype=np.float32)
+
         # Parâmetros de transformações geométricas filhas
         self.wing_sweep_angle = 20.0   # 20 graus (aberta) até 68 graus (fechada/supersônica)
         self.auto_wing_sweep = True
@@ -95,6 +101,7 @@ class Aircraft:
         self.crash_reason = ""
         self.crash_timer = 0.0
         self.afterburner = False
+        self.last_wrap_delta = np.zeros(3, dtype=np.float32)
 
         self.forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
@@ -135,7 +142,6 @@ class Aircraft:
         if self.crashed:
             return
         self.afterburner = not self.afterburner
-        # Se ligou o afterburner com throttle muito baixo, aplica potência mínima para ignição
         if self.afterburner and self.throttle < 0.25:
             self.throttle = 0.25
         estado = "LIGADO (Empuxo Máximo Supersônico)" if self.afterburner else "DESLIGADO (Empuxo Seco / Militar)"
@@ -210,7 +216,6 @@ class Aircraft:
             # 2. Interação e Colisão com o Convés / Casco do Porta-Aviões
             deck_contact_y = CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET
             if self.is_within_carrier_deck_xz():
-                # Se estava acima do convés e desceu até a altura de toque
                 if not self.on_ground and self.pos[1] <= deck_contact_y and prev_pos[1] >= CARRIER_DECK_Y - 1.0:
                     if self.gear_deploy > 0.75 and self.forward[1] > -0.42 and self.up[1] > 0.72:
                         self.pos[1] = deck_contact_y
@@ -230,7 +235,6 @@ class Aircraft:
                         self.trigger_crash("POUSO MUITO VIOLENTO OU DESNIVELADO NO CONVÉS!")
                         return
 
-                # Colisão frontal/lateral com o casco/sponsons do navio abaixo do nível da pista
                 elif not self.on_ground and self.pos[1] < CARRIER_DECK_Y:
                     self.trigger_crash("COLISÃO COM O CASCO DO PORTA-AVIÕES!")
                     return
@@ -270,7 +274,9 @@ class Aircraft:
                     return
 
     def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):
-        """Atualiza a cinemática de solo/voo, pós-combustor, arrasto do trem de pouso e colisões."""
+        """Atualiza a cinemática de solo/voo, teleporte Roundabout, pós-combustor, trem de pouso e colisões."""
+        self.last_wrap_delta = np.zeros(3, dtype=np.float32)
+
         if self.crashed:
             self.crash_timer -= dt
             if self.crash_timer <= 0.0:
@@ -311,36 +317,30 @@ class Aircraft:
             else:
                 self.speed += (target_speed - self.speed) * min(1.0, accel_rate * dt)
 
-            # Direção (Steering da roda de nariz) com 'A' e 'D' quando em movimento no chão
             if self.speed > 0.5 and abs(yaw_input) > 1e-4:
                 steer_rate = 0.75 * min(1.0, self.speed / 25.0)
                 self.yaw(yaw_input * steer_rate * dt)
 
-            # Deslocamento horizontal sobre o convés
             self.pos += self.forward * self.speed * dt
             self.pos[1] = CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET
 
-            # Decolagem (Rotation): atingiu velocidade mínima de voo e puxou o manche (pitch_input > 0)
             if self.speed >= self.min_flight_speed and pitch_input > 0.1:
                 self.on_ground = False
                 self.pitch(0.12)
                 self.pos[1] += 0.25
                 print("[Voo] Decolagem realizada! Pressione 'Q' para recolher o trem de pouso e reduzir o arrasto.")
 
-            # Verifica se saiu dos limites da pista do porta-aviões
             elif not self.is_within_carrier_deck_xz():
                 self.on_ground = False
                 if self.speed < self.min_flight_speed:
                     print("[Alerta] Saiu do convés sem velocidade de sustentação!")
 
         # ======================================================================
-        # MODO EM VOO (6-DOF Livre sem Gimbal Lock)
+        # MODO EM VOO (6-DOF Livre sem Gimbal Lock + Mundo Infinito Roundabout)
         # ======================================================================
         else:
             target_speed = MIN_GLIDE_SPEED + self.throttle * (self.max_speed - MIN_GLIDE_SPEED)
 
-            # Se a velocidade atual está acima da velocidade alvo (ex: baixou o trem de pouso ou
-            # desligou o afterburner em alta velocidade), aplica arrasto aerodinâmico de frenagem
             if self.speed > target_speed:
                 drag_decel = 1.8 + GEAR_AIRBRAKE_DECEL * self.gear_deploy
                 self.speed += (target_speed - self.speed) * min(1.0, drag_decel * dt)
@@ -365,6 +365,11 @@ class Aircraft:
             if self.speed < self.min_flight_speed:
                 sink_rate = (self.min_flight_speed - self.speed) * 0.85
                 self.pos[1] -= sink_rate * dt
+
+            # Teleporte Toroidal ("Roundabout") ao cruzar os limites do mapa
+            self.last_wrap_delta = wrap_position_roundabout(self.pos, scene_mode)
+            if abs(self.last_wrap_delta[0]) > 1e-3 or abs(self.last_wrap_delta[2]) > 1e-3:
+                prev_pos += self.last_wrap_delta
 
         # Enflecamento automático das asas do F-14 (20° aberta -> 68° fechada em regime supersônico)
         if self.auto_wing_sweep:

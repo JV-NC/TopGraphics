@@ -2,6 +2,8 @@
 ================================================================================
 TopGraphics | scene_canyon.py
 Cena 2: cânion procedural ("Trench Run"), usando sandstone.png em toda a cena.
+  - Função matemática 100% periódica (C-infinito nas bordas X = +-360 e Z = -1500..+500)
+    para permitir o efeito Roundabout (mapa infinito).
   - Exporta a função matemática do terreno e a checagem de colisão com as rochas.
 ================================================================================
 """
@@ -13,38 +15,58 @@ from OpenGL.GL import *
 
 from math_utils import compute_normal
 from renderer_utils import draw_box, upload_texture_rgb, load_texture_from_assets
+from scene_utils import (
+    SCENE2_X_MIN, SCENE2_X_MAX, SCENE2_SPAN_X,
+    SCENE2_Z_MIN, SCENE2_Z_MAX, SCENE2_SPAN_Z,
+)
 
 
 # ==============================================================================
-# CONSTANTES DO TERRENO
+# CONSTANTES DO TERRENO PERIÓDICO (ROUNDABOUT)
 # ==============================================================================
 
-CANYON_BUNKER_Z = -1150.0   # Posição Z do bunker alvo no final do cânion
+CANYON_BUNKER_Z = -1150.0   # Posição Z do bunker alvo em cada ciclo do cânion
+
+# Frequências angulares fundamentais (garantem f(x + Lx, z + Lz) == f(x, z) exato)
+_OMEGA_X = (2.0 * math.pi) / SCENE2_SPAN_X   # 2*pi / 720.0
+_OMEGA_Z = (2.0 * math.pi) / SCENE2_SPAN_Z   # 2*pi / 2000.0
+
+
+def _wrap_canyon_xz(x, z):
+    """Mapeia qualquer coordenada (x, z) para a célula fundamental do cânion."""
+    xw = ((x - SCENE2_X_MIN) % SCENE2_SPAN_X) + SCENE2_X_MIN
+    zw = ((z - SCENE2_Z_MIN) % SCENE2_SPAN_Z) + SCENE2_Z_MIN
+    return xw, zw
 
 
 def canyon_center_x(z):
-    """Coordenada X do eixo central sinuoso do cânion na profundidade z."""
-    return 55.0 * math.sin(z * 0.0045) + 25.0 * math.cos(z * 0.011)
+    """
+    Coordenada X do eixo central sinuoso do cânion na profundidade z.
+    Usa harmônicos inteiros (1 e 3) de _OMEGA_Z para fechar um ciclo perfeito a cada 2000m.
+    """
+    return 55.0 * math.sin(1.0 * _OMEGA_Z * z) + 25.0 * math.cos(3.0 * _OMEGA_Z * z)
 
 
 def canyon_height_func(x, z):
     """
-    Função matemática f(x, z) que esculpe um corredor sinuoso ("Trench Run")
+    Função matemática f(x, z) periódica que esculpe um corredor sinuoso ("Trench Run")
     com fundo plano navegável e paredões rochosos escarpados nas laterais.
-    Usada tanto para gerar a malha 3D quanto para checar colisão exata com a rocha.
+    Como utiliza harmônicos exatos de _OMEGA_X e _OMEGA_Z, a altura e a inclinação
+    em Z = -1500 casam perfeitamente com Z = +500 (e X = -360 com X = +360).
     """
-    center_x = canyon_center_x(z)
-    dist = abs(x - center_x)
+    xw, zw = _wrap_canyon_xz(x, z)
+    center_x = canyon_center_x(zw)
+    dist = abs(xw - center_x)
 
     canyon_wall = max(0.0, dist - 42.0)
     wall_height = min(165.0, (canyon_wall ** 1.35) * 0.65)
 
     roughness = (
-        14.0 * math.sin(x * 0.045) * math.cos(z * 0.045)
-        + 7.0 * math.sin(x * 0.11 + z * 0.09)
+        14.0 * math.sin(5.0 * _OMEGA_X * xw) * math.cos(14.0 * _OMEGA_Z * zw)
+        + 7.0 * math.sin(13.0 * _OMEGA_X * xw + 28.0 * _OMEGA_Z * zw)
     )
     if dist < 42.0:
-        return 2.0 + 1.2 * math.sin(x * 0.08) * math.cos(z * 0.08)
+        return 2.0 + 1.2 * math.sin(9.0 * _OMEGA_X * xw) * math.cos(25.0 * _OMEGA_Z * zw)
     return max(2.0, wall_height + roughness)
 
 
@@ -52,7 +74,7 @@ def _generate_canyon_boulders():
     """
     Gera de forma determinística (seed fixo) a lista de rochas/matacões 3D
     distribuídos ao longo do leito e das encostas do cânion (entre Z = +230 e Z = -1050),
-    mantendo a zona inicial de voo (Z > 260) e o corredor central navegáveis.
+    mantendo a zona inicial de voo (Z > 260) e a transição de borda navegáveis.
     """
     rng = np.random.default_rng(77)
     boulders = []
@@ -94,8 +116,7 @@ CANYON_ROCK_OBSTACLES = _generate_canyon_boulders()
 def check_canyon_rock_collisions(pos, right_vec=None, forward_vec=None):
     """
     Verifica se o caça (centro, pontas das asas ou nariz) colidiu com alguma
-    das rochas procedurais 3D do Cenário 2.
-    Retorna (True, motivo_str) em caso de impacto, ou (False, "") caso contrário.
+    das rochas procedurais 3D do Cenário 2 (considerando coordenadas periódicas).
     """
     sample_points = [pos]
     if right_vec is not None:
@@ -105,7 +126,8 @@ def check_canyon_rock_collisions(pos, right_vec=None, forward_vec=None):
         sample_points.append(pos + forward_vec * 4.8)
 
     for pt in sample_points:
-        px, py, pz = float(pt[0]), float(pt[1]), float(pt[2])
+        px, pz = _wrap_canyon_xz(float(pt[0]), float(pt[2]))
+        py = float(pt[1])
         for b in CANYON_ROCK_OBSTACLES:
             if abs(pz - b["z"]) > (b["rz"] + 2.5):
                 continue
@@ -234,38 +256,41 @@ def _draw_procedural_boulder(boulder):
 
 
 # ==============================================================================
-# CONSTRUÇÃO DA CENA 2 (DISPLAY LIST)
+# CONSTRUÇÃO DA CENA 2 (DISPLAY LIST PERIÓDICA)
 # ==============================================================================
 
 def build_scene2_canyon_list(canyon_tex_id):
     """
     Compila a Cena 2: Cânion Procedural ("Trench Run" de Top Gun: Maverick).
-    Usa a mesma textura sandstone.png no piso, nos paredões e nas rochas 3D.
-    O bunker alvo fica no final do cânion (z = -1150).
+    Malha gerada exatamente em X = [-360..+360] (passo 18m) e Z = [-1500..+500] (passo 20m)
+    com uv_world_scale = 0.05 (múltiplo par exato do período em X e Z para GL_MIRRORED_REPEAT).
     """
-
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
 
     glEnable(GL_TEXTURE_2D)
+    glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.20, 0.18, 0.15, 1.0])
     glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 14.0)
 
-    x_min, x_max, dx = -360.0, 360.0, 18.0
-    z_min, z_max, dz = -1400.0, 500.0, 20.0
-
-    xs = np.arange(x_min, x_max + dx, dx)
-    zs = np.arange(z_min, z_max + dz, dz)
+    dx = 18.0
+    dz = 20.0
+    xs = np.linspace(SCENE2_X_MIN, SCENE2_X_MAX, int(round(SCENE2_SPAN_X / dx)) + 1)
+    zs = np.linspace(SCENE2_Z_MIN, SCENE2_Z_MAX, int(round(SCENE2_SPAN_Z / dz)) + 1)
 
     heights = np.zeros((len(xs), len(zs)), dtype=np.float32)
     for i, x in enumerate(xs):
         for j, z in enumerate(zs):
-            heights[i, j] = canyon_height_func(x, z)
+            heights[i, j] = canyon_height_func(float(x), float(z))
+    # Garante igualdade numérica absoluta de ponto flutuante nas bordas de costura
+    heights[-1, :] = heights[0, :]
+    heights[:, -1] = heights[:, 0]
 
-    uv_world_scale = 0.045
+    # Escala UV 0.05 -> 720 * 0.05 = 36 (par) e 2000 * 0.05 = 100 (par):
+    # garante continuidade exata de textura UV nas bordas do Roundabout!
+    uv_world_scale = 0.05
 
     # 1A. Malha do leito do cânion (usa sandstone.png)
-    glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
     glBegin(GL_TRIANGLES)
     for i in range(len(xs) - 1):
         for j in range(len(zs) - 1):
