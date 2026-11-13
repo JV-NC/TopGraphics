@@ -13,11 +13,18 @@ import math
 import numpy as np
 
 from math_utils import normalize
-from scene_carrier import CARRIER_DECK_Y, CARRIER_DECK_HALF_W, CARRIER_DECK_HALF_L
-from scene_canyon import canyon_height_func, canyon_center_x, CANYON_BUNKER_Z
+from scene_canyon import (
+    canyon_height_func,
+    canyon_center_x,
+    CANYON_BUNKER_Z,
+    check_canyon_rock_collisions,
+)
 from scene_carrier import (
-    CARRIER_DECK_Y, CARRIER_DECK_HALF_W, CARRIER_DECK_HALF_L,
-    is_within_cvn65_deck_polygon, check_cvn65_extra_collisions
+    CARRIER_DECK_Y,
+    CARRIER_DECK_HALF_W,
+    CARRIER_DECK_HALF_L,
+    is_within_cvn65_deck_polygon,
+    check_cvn65_extra_collisions,
 )
 
 GEAR_HEIGHT_OFFSET = 1.45       # Altura do eixo central do F-14 até a base das rodas
@@ -187,7 +194,8 @@ class Aircraft:
 
     def check_collisions(self, prev_pos, scene_mode):
         """
-        Verifica todas as colisões físicas do caça com o Porta-Aviões (CVN-65), Oceano e Cânion.
+        Verifica todas as colisões físicas do caça com o Porta-Aviões (CVN-65), Oceano,
+        Rochas 3D e Paredes do Cânion.
         """
         if self.crashed:
             return
@@ -241,7 +249,13 @@ class Aircraft:
                 self.trigger_crash("IMPACTO DIRETO COM O BUNKER ALVO!")
                 return
 
-            # 2. Colisão com o solo e paredões rochosos do Cânion Procedural
+            # 2. Colisão com as Rochas / Matacões 3D procedurais do cânion
+            hit_rock, rock_reason = check_canyon_rock_collisions(self.pos, self.right, self.forward)
+            if hit_rock:
+                self.trigger_crash(rock_reason)
+                return
+
+            # 3. Colisão com o solo e paredões rochosos do Cânion Procedural
             wing_span_check = 4.8
             sample_points = [
                 self.pos,
@@ -252,7 +266,7 @@ class Aircraft:
             for pt in sample_points:
                 ground_y = canyon_height_func(float(pt[0]), float(pt[2]))
                 if pt[1] <= ground_y + 1.35:
-                    self.trigger_crash("COLISÃO COM AS ROCHAS DO CÂNION!")
+                    self.trigger_crash("COLISÃO COM AS PAREDES DO CÂNION!")
                     return
 
     def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):

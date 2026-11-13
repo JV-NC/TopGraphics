@@ -1,40 +1,179 @@
 """
 ================================================================================
 TopGraphics | renderer_utils.py
-Utilitários de renderização compartilhados: upload de texturas, iluminação (Phong),
-primitivas com normal automática (quad, triângulo, caixa) e overlays 2D (HUD / Game Over).
+Utilitários de renderização compartilhados: carregamento de texturas de 'assets/'
+(com fallback procedural), iluminação (Phong), primitivas com normal automática
+e overlays 2D (HUD / Game Over).
 ================================================================================
 """
 
-# TODO: implement textures in assets
-
+import os
 import math
 
 import numpy as np
 from OpenGL.GL import *
 from OpenGL.GLU import *
 
+try:
+    from PIL import Image
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
 from math_utils import compute_normal
 
 
 # ==============================================================================
-# TEXTURAS
+# UPLOAD E CARREGAMENTO DE TEXTURAS (ASSETS + FALLBACK PROCEDURAL)
 # ==============================================================================
 
-def upload_texture_rgb(img):
+def upload_texture_rgb(img, mirrored_repeat=True, use_mipmaps=True):
     """
     Envia uma imagem RGB (numpy uint8, shape (altura, largura, 3)) ao OpenGL como
-    textura 2D repetível (GL_REPEAT) com filtragem linear e devolve o id da textura.
+    textura 2D. Utiliza GL_MIRRORED_REPEAT (para evitar costuras visíveis entre
+    ladrilhos adjacentes) e Mipmaps (para evitar serrilhado/cintilação no horizonte
+    e melhorar o desempenho de cache da GPU).
     """
+    img = np.ascontiguousarray(img, dtype=np.uint8)
     height, width = img.shape[:2]
     tex_id = glGenTextures(1)
     glBindTexture(GL_TEXTURE_2D, tex_id)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+
+    wrap_mode = GL_MIRRORED_REPEAT if (mirrored_repeat and ("GL_MIRRORED_REPEAT" in globals())) else GL_REPEAT
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_mode)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_mode)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, img)
+
+    if use_mipmaps:
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+        gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGB, width, height, GL_RGB, GL_UNSIGNED_BYTE, img)
+    else:
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, img)
+
     return tex_id
+
+
+def _resolve_asset_path(filename):
+    """
+    Localiza um arquivo de textura dentro do diretório 'assets/' independentemente
+    de o script ter sido executado da raiz do projeto ou de dentro de 'src/'.
+    Também procura automaticamente por extensões alternativas (.jpg, .jpeg, .png, .bmp, .webp).
+    """
+    module_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(module_dir)
+
+    search_dirs = [
+        os.path.join(project_root, "assets"),
+        os.path.join(module_dir, "assets"),
+        os.path.join(os.getcwd(), "assets"),
+        project_root,
+        module_dir,
+        os.getcwd(),
+    ]
+
+    stem, ext = os.path.splitext(filename)
+    candidate_names = [filename]
+    for alt_ext in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+        if alt_ext.lower() != ext.lower():
+            candidate_names.append(stem + alt_ext)
+
+    for d in search_dirs:
+        for cname in candidate_names:
+            candidate_path = os.path.join(d, cname)
+            if os.path.isfile(candidate_path):
+                return candidate_path
+
+    return None
+
+
+def _prepare_asset_image(arr, mode="auto"):
+    """
+    Pré-processamento leve e limpo para texturas de 'assets/':
+      1. Remove tarjas pretas horizontais/verticais de letterbox nas bordas.
+      2. Se a imagem estiver em escala de cinza escura (onde o brilho máximo é ~80/255), expande a faixa dinâmica
+         para que os detalhes de ondas ou estratos rochosos fiquem nítidos sob a luz.
+    """
+    # 1. Remove tarjas pretas de letterbox nas bordas (se existirem)
+    row_means = arr.mean(axis=(1, 2))
+    col_means = arr.mean(axis=(0, 2))
+    valid_rows = np.where(row_means > 25.0)[0]
+    valid_cols = np.where(col_means > 25.0)[0]
+
+    if len(valid_rows) > 64 and len(valid_cols) > 64:
+        r0, r1 = int(valid_rows[0]), int(valid_rows[-1])
+        c0, c1 = int(valid_cols[0]), int(valid_cols[-1])
+        if r0 > 0 or r1 < arr.shape[0] - 1 or c0 > 0 or c1 < arr.shape[1] - 1:
+            r0 = min(r0 + 2, r1 - 32)
+            r1 = max(r1 - 2, r0 + 32)
+            c0 = min(c0 + 2, c1 - 32)
+            c1 = max(c1 - 2, c0 + 32)
+            arr = arr[r0:r1 + 1, c0:c1 + 1].copy()
+
+    # 2. Normalização para texturas monocromáticas escuras
+    arr_f = arr.astype(np.float32)
+    rg_diff = float(np.mean(np.abs(arr_f[:, :, 0] - arr_f[:, :, 1])))
+    gb_diff = float(np.mean(np.abs(arr_f[:, :, 1] - arr_f[:, :, 2])))
+
+    if rg_diff < 12.0 and gb_diff < 12.0:
+        lum = 0.299 * arr_f[:, :, 0] + 0.587 * arr_f[:, :, 1] + 0.114 * arr_f[:, :, 2]
+        p_low, p_high = np.percentile(lum, [2.0, 99.0])
+        norm = np.clip((lum - p_low) / max(1.0, (p_high - p_low)), 0.0, 1.0)
+
+        if mode == "ocean":
+            crest = norm ** 1.35
+            r = np.clip(18.0 + 115.0 * crest, 0.0, 255.0)
+            g = np.clip(68.0 + 135.0 * norm, 0.0, 255.0)
+            b = np.clip(128.0 + 112.0 * (norm ** 0.85), 0.0, 255.0)
+            return np.stack([r, g, b], axis=-1).astype(np.uint8)
+        elif mode == "rock":
+            # Expande o contraste dos estratos de 'sandstone.png' com tom de arenito quente
+            curved = norm ** 0.90
+            r = np.clip(68.0 + 165.0 * curved, 0.0, 255.0)
+            g = np.clip(54.0 + 138.0 * curved, 0.0, 255.0)
+            b = np.clip(42.0 + 108.0 * curved, 0.0, 255.0)
+            return np.stack([r, g, b], axis=-1).astype(np.uint8)
+
+    return arr
+
+
+def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_size=512):
+    """
+    Carrega uma textura do diretório 'assets/', aplica o pré-processamento leve, redimensiona para potência de 2
+    (target_size x target_size) e envia ao OpenGL com Mipmaps.
+    Se o arquivo não for encontrado ou o Pillow não estiver instalado, executa fallback_fn().
+    """
+    asset_path = _resolve_asset_path(filename)
+
+    if asset_path is not None and PIL_AVAILABLE:
+        try:
+            with Image.open(asset_path) as im:
+                im_rgb = im.convert("RGB")
+                arr = np.array(im_rgb, dtype=np.uint8)
+
+            arr = _prepare_asset_image(arr, mode=mode)
+
+            if arr.shape[0] != target_size or arr.shape[1] != target_size:
+                resample_filter = getattr(Image, "Resampling", Image).LANCZOS
+                im_resized = Image.fromarray(arr).resize((target_size, target_size), resample_filter)
+                arr = np.array(im_resized, dtype=np.uint8)
+
+            print(f"[Texturas] Carregada de assets: '{os.path.basename(asset_path)}' ({target_size}x{target_size}, modo={mode})")
+            return upload_texture_rgb(arr, mirrored_repeat=True, use_mipmaps=True)
+
+        except Exception as exc:
+            print(f"[Aviso] Falha ao carregar textura '{filename}' ({exc}). Usando fallback procedural.")
+    else:
+        if not PIL_AVAILABLE:
+            print(f"[Aviso] Biblioteca Pillow (PIL) não instalada ('pip install Pillow'). Usando textura procedural para '{filename}'.")
+        else:
+            print(f"[Aviso] Arquivo 'assets/{filename}' não encontrado. Usando textura procedural de fallback.")
+
+    if fallback_fn is not None:
+        return fallback_fn()
+
+    default_img = np.full((64, 64, 3), 180, dtype=np.uint8)
+    return upload_texture_rgb(default_img)
 
 
 # ==============================================================================

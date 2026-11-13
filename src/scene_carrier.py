@@ -1,8 +1,8 @@
 """
 ================================================================================
 TopGraphics | scene_carrier.py
-Cena 1: Oceano texturizado + Porta-Aviões Nuclear USS Enterprise (CVN-65).
-Integrado com scene_utils.py (Nascer do Sol e Nuvens de Vapor Procedurais).
+Cena 1: Oceano texturizado ('assets/ocean_water.png' com fallback procedural)
++ Porta-Aviões Nuclear USS Enterprise (CVN-65).
 ================================================================================
 """
 
@@ -11,7 +11,7 @@ import math
 import numpy as np
 from OpenGL.GL import *
 
-from renderer_utils import upload_texture_rgb
+from renderer_utils import upload_texture_rgb, load_texture_from_assets
 from cvn_65_model import (
     CARRIER_DECK_Y,
     CARRIER_DECK_HALF_W,
@@ -24,11 +24,11 @@ from cvn_65_model import (
 
 
 # ==============================================================================
-# TEXTURAS PROCEDURAIS DA CENA 1
+# TEXTURAS DA CENA 1 (ASSETS + FALLBACK PROCEDURAL)
 # ==============================================================================
 
-def create_ocean_texture():
-    """Gera uma textura 128x128 para a superfície do oceano com padrão de ondas."""
+def _create_procedural_ocean_texture():
+    """Fallback procedural 128x128 caso 'assets/ocean_water.png' não seja encontrado."""
     size = 128
     img = np.zeros((size, size, 3), dtype=np.uint8)
     for y in range(size):
@@ -48,6 +48,19 @@ def create_ocean_texture():
     return upload_texture_rgb(img)
 
 
+def create_ocean_texture():
+    """
+    Carrega a textura 'assets/ocean_water.png' (convertendo automaticamente a faixa
+    de ondas monocromática para azul-oceânico naval com mipmaps e repetição espelhada).
+    """
+    return load_texture_from_assets(
+        "ocean_water.png",
+        fallback_fn=_create_procedural_ocean_texture,
+        mode="ocean",
+        target_size=512,
+    )
+
+
 def create_deck_texture():
     """Delega a criação da textura de alta resolução do convés do CVN-65."""
     return create_cvn65_deck_texture()
@@ -59,8 +72,8 @@ def create_deck_texture():
 
 def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
     """
-    Compila a Cena 1: Oceano amplo texturizado com reflexo especular para o
-    nascer do sol + USS Enterprise (CVN-65) detalhado (boias luminosas removidas).
+    Compila a Cena 1: Oceano amplo texturizado com 'ocean_water.png' e reflexo
+    especular para o nascer do sol + USS Enterprise (CVN-65) detalhado.
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
@@ -69,11 +82,11 @@ def build_scene1_carrier_list(ocean_tex_id, deck_tex_id):
     glBindTexture(GL_TEXTURE_2D, ocean_tex_id)
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.65, 0.55, 0.42, 1.0])
     glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 42.0)
-    glColor3f(0.82, 0.88, 0.96)
+    glColor3f(0.92, 0.95, 1.0)
 
     grid_size = 2400.0
     step = 120.0
-    uv_tile = 2.0
+    uv_tile = 4.0  # Ladrilhamento par compatível com GL_MIRRORED_REPEAT sem costuras
     glBegin(GL_QUADS)
     glNormal3f(0.0, 1.0, 0.0)
     z = -grid_size
