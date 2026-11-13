@@ -1,12 +1,7 @@
 """
 ================================================================================
 TopGraphics | scene_canyon.py
-Cena 2: cânion procedural ("Trench Run").
-  - Suporta os dois candidatos de textura ('assets/sandstone.png' e 'assets/desert_sand.png'):
-      * Modo "combined" (Padrão): 'desert_sand.png' no leito arenoso plano do cânion
-        + 'sandstone.png' nos paredões escarpados e nas rochas/matacões 3D.
-      * Modo "sandstone": aplica 'sandstone.png' em todo o cânion e nas rochas.
-      * Modo "desert_sand": aplica 'desert_sand.png' em todo o cânion e nas rochas.
+Cena 2: cânion procedural ("Trench Run"), usando sandstone.png em toda a cena.
   - Exporta a função matemática do terreno e a checagem de colisão com as rochas.
 ================================================================================
 """
@@ -21,14 +16,8 @@ from renderer_utils import draw_box, upload_texture_rgb, load_texture_from_asset
 
 
 # ==============================================================================
-# CONFIGURAÇÃO DE SKIN DO CÂNION E CONSTANTES DO TERRENO
+# CONSTANTES DO TERRENO
 # ==============================================================================
-
-# Opções para testar facilmente:
-#   "combined"    -> 'desert_sand.png' no chão do cânion + 'sandstone.png' nas paredes e pedras 3D
-#   "sandstone"   -> 'sandstone.png' em tudo (paredes, chão e pedras 3D)
-#   "desert_sand" -> 'desert_sand.png' em tudo (paredes, chão e pedras 3D)
-CANYON_SKIN_MODE = "sandstone"
 
 CANYON_BUNKER_Z = -1150.0   # Posição Z do bunker alvo no final do cânion
 
@@ -135,7 +124,7 @@ def check_canyon_rock_collisions(pos, right_vec=None, forward_vec=None):
 
 
 # ==============================================================================
-# TEXTURAS DA CENA 2 (SANDSTONE.PNG + DESERT_SAND.PNG + FALLBACK PROCEDURAL)
+# TEXTURA DA CENA 2 (SANDSTONE.PNG + FALLBACK PROCEDURAL)
 # ==============================================================================
 
 def _create_procedural_canyon_texture():
@@ -155,45 +144,10 @@ def _create_procedural_canyon_texture():
 
 
 def create_canyon_texture():
-    """
-    Carrega a textura principal de rocha/paredão do cânion de acordo com CANYON_SKIN_MODE:
-      - Em modo 'desert_sand', carrega 'assets/desert_sand.png'.
-      - Nos modos 'combined' ou 'sandstone', carrega 'assets/sandstone.png' (e se não
-        existir, tenta 'desert_sand.png' antes do fallback procedural).
-    """
-    if CANYON_SKIN_MODE == "desert_sand":
-        return load_texture_from_assets(
-            "desert_sand.png",
-            fallback_fn=_create_procedural_canyon_texture,
-            mode="rock",
-            target_size=512,
-        )
-
+    """Carrega sandstone.png ou usa a textura procedural como fallback."""
     return load_texture_from_assets(
         "sandstone.png",
-        fallback_fn=lambda: load_texture_from_assets(
-            "desert_sand.png",
-            fallback_fn=_create_procedural_canyon_texture,
-            mode="rock",
-            target_size=512,
-        ),
-        mode="rock",
-        target_size=512,
-    )
-
-
-def create_canyon_floor_texture(wall_tex_id):
-    """
-    No modo 'combined', carrega 'assets/desert_sand.png' especificamente para o
-    leito arenoso do cânion. Nos outros modos (ou se 'desert_sand.png' não existir),
-    reutiliza a própria textura das paredes (wall_tex_id).
-    """
-    if CANYON_SKIN_MODE != "combined":
-        return wall_tex_id
-
-    return load_texture_from_assets(
-        "desert_sand.png",
-        fallback_fn=lambda: wall_tex_id,
+        fallback_fn=_create_procedural_canyon_texture,
         mode="rock",
         target_size=512,
     )
@@ -205,8 +159,7 @@ def create_canyon_floor_texture(wall_tex_id):
 
 def _draw_procedural_boulder(boulder):
     """
-    Desenha um matacão/rocha 3D facetado (domo poligonal irregular) usando a textura
-    de rocha ativa ('sandstone.png' ou 'desert_sand.png').
+    Desenha um matacão/rocha 3D facetado usando a textura sandstone.png.
     """
     rng = np.random.default_rng(boulder["seed"])
     rx, ry, rz = boulder["rx"], boulder["ry"], boulder["rz"]
@@ -286,12 +239,10 @@ def _draw_procedural_boulder(boulder):
 
 def build_scene2_canyon_list(canyon_tex_id):
     """
-    Compila a Cena 2: Cânion Procedural ("Trench Run" de Top Gun: Maverick)
-      - Piso plano do cânion (avg_y < 6.5): texturizado com 'desert_sand.png' (no modo 'combined').
-      - Paredões escarpados (avg_y >= 6.5) e Rochas 3D: texturizados com 'sandstone.png'.
-      - Bunker Alvo no final (z = -1150).
+    Compila a Cena 2: Cânion Procedural ("Trench Run" de Top Gun: Maverick).
+    Usa a mesma textura sandstone.png no piso, nos paredões e nas rochas 3D.
+    O bunker alvo fica no final do cânion (z = -1150).
     """
-    floor_tex_id = create_canyon_floor_texture(canyon_tex_id)
 
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
@@ -313,8 +264,8 @@ def build_scene2_canyon_list(canyon_tex_id):
 
     uv_world_scale = 0.045
 
-    # 1A. Malha do Leito Arenoso do Cânion (avg_y < 6.5 -> usa floor_tex_id / desert_sand.png)
-    glBindTexture(GL_TEXTURE_2D, floor_tex_id)
+    # 1A. Malha do leito do cânion (usa sandstone.png)
+    glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
     glBegin(GL_TRIANGLES)
     for i in range(len(xs) - 1):
         for j in range(len(zs) - 1):
@@ -349,8 +300,7 @@ def build_scene2_canyon_list(canyon_tex_id):
             glTexCoord2f(u10, v10); glVertex3fv(p10)
     glEnd()
 
-    # 1B. Malha dos Paredões Rochosos e Topo das Montanhas (avg_y >= 6.5 -> usa canyon_tex_id / sandstone.png)
-    glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
+    # 1B. Malha dos paredões rochosos e topo das montanhas (usa sandstone.png)
     glBegin(GL_TRIANGLES)
     for i in range(len(xs) - 1):
         for j in range(len(zs) - 1):
@@ -388,8 +338,7 @@ def build_scene2_canyon_list(canyon_tex_id):
             glTexCoord2f(u10, v10); glVertex3fv(p10)
     glEnd()
 
-    # 2. Rochas / Matacões 3D gerados proceduralmente (usam canyon_tex_id / sandstone.png)
-    glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
+    # 2. Rochas / matacões 3D gerados proceduralmente (usam sandstone.png)
     for boulder in CANYON_ROCK_OBSTACLES:
         _draw_procedural_boulder(boulder)
 
