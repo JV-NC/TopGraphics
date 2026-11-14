@@ -13,8 +13,6 @@ Execução (a partir da raiz do repositório):
 # TODO: implement sound effects (engine sounds, ocean ambient sounds, and a soundtrack that can be muted)
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)
 # TODO: implement Scenario 3 (just the aircraft in camera 3 for model analisys and reaction of the controls)
-# TODO: implement HUD for plane information about velocity, altitude, landing gear, etc (all that is in window title moved in a hud)
-# TODO: implement compass or facing direction (as hud) and/or use GPS lat-long coordinates
 
 import sys
 import time
@@ -45,7 +43,8 @@ from scene_utils import (
     draw_procedural_clouds,
     draw_periodic_scene,
 )
-from renderer_utils import setup_lighting, draw_cockpit_hud, draw_crash_overlay
+from renderer_utils import setup_lighting
+from hud import draw_flight_hud, draw_crash_overlay
 
 
 # ==============================================================================
@@ -56,10 +55,11 @@ class TopGraphicsApp:
     def __init__(self, initial_scene=1):
         self.scene_mode = initial_scene  # 1 = Oceano + Porta-Aviões, 2 = Cânion Procedural
 
-        # Estados de recursos gráficos
+        # Estados de recursos gráficos e interface
         self.lighting_enabled = True
         self.textures_enabled = True
         self.wireframe_mode = False
+        self.hud_enabled = True
 
         # Instância única do F-14 Tomcat
         self.player = Aircraft()
@@ -69,7 +69,7 @@ class TopGraphicsApp:
         self.camera = CameraController(self.player)
 
     def key_callback(self, window, key, scancode, action, mods):
-        """Trata atalhos discretos de teclado para câmeras, trem de pouso, afterburner, cenas e inspeção."""
+        """Trata atalhos discretos de teclado para câmeras, trem de pouso, afterburner, HUD, cenas e inspeção."""
         if action != glfw.PRESS:
             return
 
@@ -85,6 +85,9 @@ class TopGraphicsApp:
             self.player.toggle_gear()
         elif key == glfw.KEY_E:
             self.player.toggle_afterburner()
+        elif key == glfw.KEY_H:
+            self.hud_enabled = not self.hud_enabled
+            print(f"[HUD] Interface Tática: {'ATIVADA' if self.hud_enabled else 'OCULTA'}")
         elif key == glfw.KEY_M:
             self.scene_mode = 2 if self.scene_mode == 1 else 1
             self.player.reset(self.scene_mode)
@@ -174,6 +177,7 @@ class TopGraphicsApp:
         print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas em voo)")
         print(" [A / D]               : Guinada (Leme em voo / Direção da roda no convés)")
         print(" [G]                   : Alternar Enflecamento das Asas (Auto <-> Manual)")
+        print(" [H]                   : Mostrar / Ocultar HUD Tático na Tela")
         print(" [1 / 2 / 3]           : Câmeras (1: Chase, 2: Cockpit/HUD, 3: Orbital Mouse)")
         print(" [M]                   : Alternar Cenário (Porta-Aviões <-> Cânion)")
         print(" [L / T / Z]           : Ligar/Desligar Luzes (L), Texturas (T), Wireframe (Z)")
@@ -218,20 +222,6 @@ class TopGraphicsApp:
             # Sincroniza a Chase Cam caso o caça tenha cruzado a borda do mapa neste frame
             self.camera.apply_wrap_delta(self.player.last_wrap_delta)
 
-            # Atualiza título da janela com estado do voo, trem de pouso, afterburner e alertas
-            if self.player.crashed:
-                title_status = f"GAME OVER: {self.player.crash_reason}"
-            else:
-                gear_str = "DOWN" if self.player.gear_down else "UP"
-                ab_str = "ON" if self.player.afterburner else "OFF"
-                ground_str = "NO CONVÉS" if self.player.on_ground else "EM VOO"
-                title_status = (
-                    f"{ground_str} | Vel: {self.player.speed * 10:.0f}/{self.player.max_speed * 10:.0f} kt | "
-                    f"Alt: {self.player.pos[1] * 10:.0f} ft | Trem(Q): {gear_str} | AB(E): {ab_str} | "
-                    f"Asas(G): {self.player.wing_sweep_angle:.0f}° | Cam: {self.camera.mode}"
-                )
-            glfw.set_window_title(window, f"Top Graphics | {title_status}")
-
             width, height = glfw.get_framebuffer_size(window)
             height = max(1, height)
             glViewport(0, 0, width, height)
@@ -274,7 +264,7 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
-            # 2. Geometria Opaca do Cenário com Instanciação Periódica ("Roundabout" / Pac-Man)
+            # 2. Geometria Opaca do Cenário com Instanciação Periódica ("Roundabout")
             if self.scene_mode == 1:
                 draw_periodic_scene(scene1_list, self.player.pos, scene_mode=1)
                 draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
@@ -290,19 +280,25 @@ class TopGraphicsApp:
             if self.camera.mode != 2:
                 draw_f14_complete(self.player, player_fuselage_list, wing_tex, sim_time)
 
-            # 4. Nuvens Procedurais de Vapor Semitransparente (também periódicas no Roundabout)
+            # 4. Nuvens Procedurais de Vapor Semitransparente (periódicas no Roundabout)
             active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
             draw_procedural_clouds(
                 active_clouds, cloud_vapor_tex, sim_time,
                 player_pos=self.player.pos, scene_mode=self.scene_mode
             )
 
-            # 5. Overlays 2D (HUD do Cockpit e Alerta de Colisão)
-            if self.camera.mode == 2:
-                draw_cockpit_hud(width, height, self.player)
+            # 5. HUD Integrado de Aviónica e Telemetria (visível em todas as câmeras, alternável com 'H')
+            if self.hud_enabled:
+                draw_flight_hud(
+                    width, height, self.player,
+                    camera_mode=self.camera.mode,
+                    scene_mode=self.scene_mode,
+                    sim_time=sim_time
+                )
 
+            # 6. Alerta de Impacto (Game Over) com tipografia vetorial na tela
             if self.player.crashed:
-                draw_crash_overlay(width, height)
+                draw_crash_overlay(width, height, self.player.crash_reason)
 
             glfw.swap_buffers(window)
 

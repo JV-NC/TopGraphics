@@ -1,9 +1,8 @@
 """
 ================================================================================
 TopGraphics | renderer_utils.py
-Utilitários de renderização compartilhados: carregamento de texturas de 'assets/'
-(com fallback procedural), iluminação (Phong), primitivas com normal automática
-e overlays 2D (HUD / Game Over).
+Utilitários de renderização 3D compartilhados: carregamento de texturas de 'assets/'
+(com fallback procedural), iluminação (Phong) e primitivas com normal automática.
 ================================================================================
 """
 
@@ -91,10 +90,9 @@ def _prepare_asset_image(arr, mode="auto"):
     """
     Pré-processamento leve e limpo para texturas de 'assets/':
       1. Remove tarjas pretas horizontais/verticais de letterbox nas bordas.
-      2. Se a imagem estiver em escala de cinza escura (onde o brilho máximo é ~80/255), expande a faixa dinâmica
-         para que os detalhes de ondas ou estratos rochosos fiquem nítidos sob a luz.
+      2. Se a imagem estiver em escala de cinza escura (onde o brilho máximo é ~80/255),
+         expande a faixa dinâmica para destacar ondas ou estratos rochosos sob a luz.
     """
-    # 1. Remove tarjas pretas de letterbox nas bordas (se existirem)
     row_means = arr.mean(axis=(1, 2))
     col_means = arr.mean(axis=(0, 2))
     valid_rows = np.where(row_means > 25.0)[0]
@@ -110,7 +108,6 @@ def _prepare_asset_image(arr, mode="auto"):
             c1 = max(c1 - 2, c0 + 32)
             arr = arr[r0:r1 + 1, c0:c1 + 1].copy()
 
-    # 2. Normalização para texturas monocromáticas escuras
     arr_f = arr.astype(np.float32)
     rg_diff = float(np.mean(np.abs(arr_f[:, :, 0] - arr_f[:, :, 1])))
     gb_diff = float(np.mean(np.abs(arr_f[:, :, 1] - arr_f[:, :, 2])))
@@ -127,7 +124,6 @@ def _prepare_asset_image(arr, mode="auto"):
             b = np.clip(128.0 + 112.0 * (norm ** 0.85), 0.0, 255.0)
             return np.stack([r, g, b], axis=-1).astype(np.uint8)
         elif mode == "rock":
-            # Expande o contraste dos estratos de 'sandstone.png' com tom de arenito quente
             curved = norm ** 0.90
             r = np.clip(68.0 + 165.0 * curved, 0.0, 255.0)
             g = np.clip(54.0 + 138.0 * curved, 0.0, 255.0)
@@ -139,8 +135,8 @@ def _prepare_asset_image(arr, mode="auto"):
 
 def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_size=512):
     """
-    Carrega uma textura do diretório 'assets/', aplica o pré-processamento leve, redimensiona para potência de 2
-    (target_size x target_size) e envia ao OpenGL com Mipmaps.
+    Carrega uma textura do diretório 'assets/', aplica o pré-processamento leve,
+    redimensiona para potência de 2 (target_size x target_size) e envia ao OpenGL com Mipmaps.
     Se o arquivo não for encontrado ou o Pillow não estiver instalado, executa fallback_fn().
     """
     asset_path = _resolve_asset_path(filename)
@@ -244,134 +240,3 @@ def draw_box(dx, dy, dz, uv_scale=1.0):
     draw_quad_with_normal([hx, -hy, hz], [hx, -hy, -hz], [hx, hy, -hz], [hx, hy, hz], uv_scale)
     draw_quad_with_normal([-hx, -hy, -hz], [-hx, -hy, hz], [-hx, hy, hz], [-hx, hy, -hz], uv_scale)
     glEnd()
-
-
-# ==============================================================================
-# HUD DO COCKPIT E OVERLAY DE COLISÃO / GAME OVER
-# ==============================================================================
-
-def draw_cockpit_hud(width, height, aircraft):
-    """
-    Desenha um Head-Up Display (HUD) verde tático em projeção ortográfica 2D
-    quando o usuário está na Câmera 2 (Cockpit / Primeira Pessoa).
-    """
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    gluOrtho2D(0, width, 0, height)
-
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-
-    glPushAttrib(GL_ENABLE_BIT | GL_LINE_BIT)
-    glDisable(GL_DEPTH_TEST)
-    glDisable(GL_LIGHTING)
-    glDisable(GL_TEXTURE_2D)
-
-    cx, cy = width * 0.5, height * 0.5
-    glColor3f(0.15, 1.0, 0.25)
-    glLineWidth(2.0)
-
-    # Retículo central de mira
-    glBegin(GL_LINES)
-    glVertex2f(cx - 25, cy); glVertex2f(cx - 8, cy)
-    glVertex2f(cx + 8, cy);  glVertex2f(cx + 25, cy)
-    glVertex2f(cx, cy - 25); glVertex2f(cx, cy - 8)
-    glVertex2f(cx, cy + 8);  glVertex2f(cx, cy + 25)
-    glEnd()
-
-    # Horizonte Artificial
-    roll_angle = math.degrees(math.atan2(aircraft.right[1], aircraft.up[1]))
-    pitch_angle = math.degrees(math.asin(np.clip(aircraft.forward[1], -1.0, 1.0)))
-
-    glPushMatrix()
-    glTranslatef(cx, cy, 0.0)
-    glRotatef(-roll_angle, 0.0, 0.0, 1.0)
-    glTranslatef(0.0, -pitch_angle * 4.5, 0.0)
-
-    glBegin(GL_LINES)
-    glVertex2f(-120, 0); glVertex2f(-35, 0)
-    glVertex2f(35, 0);   glVertex2f(120, 0)
-    for deg in (-30, -20, -10, 10, 20, 30):
-        y_off = deg * 4.5
-        glVertex2f(-55, y_off); glVertex2f(-25, y_off)
-        glVertex2f(25, y_off);  glVertex2f(55, y_off)
-    glEnd()
-    glPopMatrix()
-
-    # Barra de Potência (Throttle) à esquerda
-    glBegin(GL_LINE_LOOP)
-    glVertex2f(cx - 240, cy - 100)
-    glVertex2f(cx - 220, cy - 100)
-    glVertex2f(cx - 220, cy + 100)
-    glVertex2f(cx - 240, cy + 100)
-    glEnd()
-
-    fill_h = 200.0 * aircraft.throttle
-    glBegin(GL_QUADS)
-    glVertex2f(cx - 238, cy - 98)
-    glVertex2f(cx - 222, cy - 98)
-    glVertex2f(cx - 222, cy - 98 + fill_h)
-    glVertex2f(cx - 238, cy - 98 + fill_h)
-    glEnd()
-
-    # Indicador luminoso de Trem de Pouso no HUD (Verde abaixo da mira quando baixado)
-    if aircraft.gear_deploy > 0.5:
-        glColor3f(0.2, 1.0, 0.2)
-        glBegin(GL_TRIANGLES)
-        glVertex2f(cx - 12, cy - 125)
-        glVertex2f(cx + 12, cy - 125)
-        glVertex2f(cx, cy - 145)
-        glEnd()
-
-    glPopAttrib()
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
-
-
-def draw_crash_overlay(width, height):
-    """
-    Desenha um alerta visual vermelho semitransparente na tela quando ocorre Game Over/Colisão.
-    """
-    glMatrixMode(GL_PROJECTION)
-    glPushMatrix()
-    glLoadIdentity()
-    gluOrtho2D(0, width, 0, height)
-
-    glMatrixMode(GL_MODELVIEW)
-    glPushMatrix()
-    glLoadIdentity()
-
-    glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_LINE_BIT)
-    glDisable(GL_DEPTH_TEST)
-    glDisable(GL_LIGHTING)
-    glDisable(GL_TEXTURE_2D)
-    glEnable(GL_BLEND)
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-    # Filtro vermelho translúcido sobre toda a tela
-    glColor4f(0.85, 0.10, 0.08, 0.42)
-    glBegin(GL_QUADS)
-    glVertex2f(0, 0)
-    glVertex2f(width, 0)
-    glVertex2f(width, height)
-    glVertex2f(0, height)
-    glEnd()
-
-    # Grande 'X' vermelho de impacto no centro da tela
-    cx, cy = width * 0.5, height * 0.5
-    glColor4f(1.0, 0.2, 0.15, 0.95)
-    glLineWidth(5.0)
-    glBegin(GL_LINES)
-    glVertex2f(cx - 80, cy - 80); glVertex2f(cx + 80, cy + 80)
-    glVertex2f(cx - 80, cy + 80); glVertex2f(cx + 80, cy - 80)
-    glEnd()
-
-    glPopAttrib()
-    glPopMatrix()
-    glMatrixMode(GL_PROJECTION)
-    glPopMatrix()
-    glMatrixMode(GL_MODELVIEW)
