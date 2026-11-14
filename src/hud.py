@@ -7,14 +7,12 @@ Renderizado 100% via código em projeção ortográfica 2D (OpenGL), incluindo:
   - Bússola deslizante no topo (Heading Tape 000°..359° + pontos cardeais + GPS Lat/Lon).
   - Horizonte Artificial com Escala de Ângulo de Arfagem (Pitch Ladder + Roll Scale).
   - Fitas verticais deslizantes de Velocidade (Knots - kt) e Altitude (Feet - ft).
-  - Painéis de Estado de Voo (No Convés / Em Voo / Stall), Throttle e Afterburner (E).
+  - Painéis de Estado de Voo (No Convés / Em Voo / Stall / Inspeção), Throttle e Afterburner (E).
   - Painel Mecânico: Trem de Pouso (Q) com luzes de roda e Asas (G) com diagrama 2D
     dinâmico que acompanha o ângulo de enflecamento em tempo real.
   - Tela de Alerta de Impacto (Game Over) com tipografia vetorial.
 ================================================================================
 """
-
-# TODO: implement show customization hud only on inspection mode (scene 3) and hides normally if presses hide/show hud button
 
 import math
 import numpy as np
@@ -25,8 +23,6 @@ from OpenGL.GLU import *
 # ==============================================================================
 # 1. FONTE VETORIAL TÁTICA (STROKE FONT) — 100% EM OPENGL
 # ==============================================================================
-# Cada glifo é definido em uma grade normalizada [0.0 .. 1.0] em X e [0.0 .. 1.0] em Y
-# como uma lista de segmentos de reta: ((x1, y1), (x2, y2)).
 
 _VECTOR_GLYPHS = {
     "0": [((0.1, 0.0), (0.9, 0.0)), ((0.9, 0.0), (0.9, 1.0)), ((0.9, 1.0), (0.1, 1.0)), ((0.1, 1.0), (0.1, 0.0)), ((0.1, 0.15), (0.9, 0.85))],
@@ -81,7 +77,6 @@ _VECTOR_GLYPHS = {
     "|": [((0.5, 0.0), (0.5, 1.0))],
 }
 
-# Mapa de normalização de caracteres acentuados para equivalentes ASCII táticos
 _ACCENT_MAP = str.maketrans(
     "ÁÀÂÃÉÊÍÓÔÕÚÇáàâãéêíóôõúç",
     "AAAAEEIOOOUCAAAAEEIOOOUC"
@@ -91,8 +86,6 @@ _ACCENT_MAP = str.maketrans(
 def draw_vector_text(text, x, y, scale=11.0, align="left", spacing=0.34):
     """
     Desenha uma string usando a fonte vetorial tática (GL_LINES).
-      - scale: altura em pixels dos caracteres.
-      - align: 'left', 'center' ou 'right'.
     """
     if not text:
         return
@@ -156,13 +149,7 @@ _CARDINAL_POINTS = {
 
 
 def _compute_heading_deg(aircraft):
-    """
-    Calcula o rumo magnético/geográfico (000° a 359°) a partir do vetor forward:
-      - Norte (000°) = -Z
-      - Leste (090°) = +X
-      - Sul   (180°) = +Z
-      - Oeste (270°) = -X
-    """
+    """Calcula o rumo magnético/geográfico (000° a 359°) a partir do vetor forward."""
     fx = float(aircraft.forward[0])
     fz = float(aircraft.forward[2])
     if abs(fx) < 1e-6 and abs(fz) < 1e-6:
@@ -172,11 +159,7 @@ def _compute_heading_deg(aircraft):
 
 
 def _compute_gps_strings(aircraft, scene_mode):
-    """
-    Converte as coordenadas (X, Z) do caça em coordenadas geográficas Latitude/Longitude:
-      - Cena 1 (Oceano Pacífico / Grupo de Batalha CVN-65): base 32°40'N, 117°30'W
-      - Cena 2 (Cânion Tático Top Gun / Fallon Range): base 39°25'N, 118°45'W
-    """
+    """Converte as coordenadas (X, Z) do caça em coordenadas geográficas Latitude/Longitude."""
     if scene_mode == 1:
         base_lat = 32.6667
         base_lon = 117.5000
@@ -184,7 +167,6 @@ def _compute_gps_strings(aircraft, scene_mode):
         base_lat = 39.4167
         base_lon = 118.7500
 
-    # Em nosso referencial: -Z avança para o Norte (+Lat), +X avança para o Leste (-Lon no hemisfério W)
     lat = base_lat + (-float(aircraft.pos[2]) / 111111.0)
     lon = base_lon - (float(aircraft.pos[0]) / 92000.0)
 
@@ -203,7 +185,7 @@ def _compute_gps_strings(aircraft, scene_mode):
 def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     """
     Desenha a Bússola Tática deslizante (Heading Tape) no topo central da tela
-    e o painel de coordenadas GPS (Latitude / Longitude).
+    e o painel de coordenadas GPS / Seletor de Cenários F1/F2/F3.
     """
     cx = width * 0.5
     tape_y = height - 44.0
@@ -213,7 +195,6 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     hdg = _compute_heading_deg(aircraft)
     lat_str, lon_str = _compute_gps_strings(aircraft, scene_mode)
 
-    # Moldura de fundo da fita da bússola
     _draw_hud_panel_box(
         cx - tape_half_w - 6, tape_y - 10,
         cx + tape_half_w + 6, tape_y + 24,
@@ -222,7 +203,6 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
         cut=5.0
     )
 
-    # Recorte com glScissor para que as marcações deslizem suavemente dentro da caixa
     glEnable(GL_SCISSOR_TEST)
     glScissor(int(cx - tape_half_w), int(tape_y - 9), int(2 * tape_half_w), 33)
 
@@ -232,7 +212,6 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     base_deg = int(math.floor(hdg))
     for offset_deg in range(-42, 43):
         d = (base_deg + offset_deg) % 360
-        # Diferença angular exata em ponto flutuante
         diff = ((d - hdg + 540.0) % 360.0) - 180.0
         x_pos = cx + diff * px_per_deg
 
@@ -252,7 +231,6 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
 
     glDisable(GL_SCISSOR_TEST)
 
-    # Marcador central fixo (Lubber Line / Caret) e caixa digital do rumo
     glColor4f(0.35, 1.0, 0.55, 1.0)
     glBegin(GL_TRIANGLES)
     glVertex2f(cx - 6.0, tape_y - 16.0)
@@ -260,7 +238,6 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     glVertex2f(cx, tape_y - 9.0)
     glEnd()
 
-    # Caixa digital do Rumo (HDG) abaixo da fita e GPS no canto superior direito
     _draw_hud_panel_box(
         cx - 44.0, tape_y - 36.0,
         cx + 44.0, tape_y - 16.0,
@@ -271,7 +248,6 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     glColor4f(0.40, 1.0, 0.58, 1.0)
     draw_vector_text(f"HDG {int(round(hdg)) % 360:03d}°", cx, tape_y - 31.0, scale=9.5, align="center")
 
-    # Coordenadas GPS e Identificação do Mapa no topo direito
     gps_x1 = width - 22.0
     gps_x0 = gps_x1 - 246.0
     gps_y1 = height - 18.0
@@ -279,13 +255,13 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     _draw_hud_panel_box(gps_x0, gps_y0, gps_x1, gps_y1, cut=5.0)
 
     if scene_mode == 1:
-        sector_name = "SECTOR 01: CVN-65 PACIFIC"
+        sector_name = "F1: CVN-65 PACIFIC [F2/F3]"
     elif scene_mode == 2:
-        sector_name = "SECTOR 02: TRENCH CANYON"
+        sector_name = "F2: TRENCH CANYON [F1/F3]"
     else:
-        sector_name = "SECTOR 03: F-14 INSPECTION"
+        sector_name = "F3: F-14 INSPECTION [F1/F2]"
     glColor4f(0.25, 1.0, 0.48, 0.95)
-    draw_vector_text(sector_name, gps_x0 + 10.0, gps_y1 - 17.0, scale=8.2, align="left")
+    draw_vector_text(sector_name, gps_x0 + 10.0, gps_y1 - 17.0, scale=8.0, align="left")
     glColor4f(0.65, 1.0, 0.78, 0.90)
     draw_vector_text(f"GPS {lat_str} {lon_str}", gps_x0 + 10.0, gps_y0 + 8.0, scale=7.8, align="left")
 
@@ -294,27 +270,22 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
     """
     Desenha o Horizonte Artificial com Escala de Ângulo de Arfagem (Pitch Ladder)
     e Indicador de Inclinação (Bank/Roll Scale) no centro da tela.
-    Em câmeras externas (Modo 1 e 3), mantém uma janela central livre (gap) ao redor
-    do caça e transparência calibrada para nunca cobrir o modelo 3D do F-14!
     """
     cx, cy = width * 0.5, height * 0.5
 
     roll_deg = math.degrees(math.atan2(float(aircraft.right[1]), float(aircraft.up[1])))
     pitch_deg = math.degrees(math.asin(np.clip(float(aircraft.forward[1]), -1.0, 1.0)))
 
-    # Ajusta opacidade e espaçamento interno conforme a câmera (Cockpit vs Externa)
     is_cockpit = (camera_mode == 2)
     alpha_main = 0.92 if is_cockpit else 0.62
     inner_gap = 28.0 if is_cockpit else 54.0
     outer_span = 98.0 if is_cockpit else 114.0
     px_per_deg = 4.6
 
-    # 1. Símbolo de Referência da Aeronave (Boresight Waterline '-v-' fixo no centro)
     glColor4f(0.25, 1.0, 0.45, alpha_main)
     glLineWidth(2.0 if is_cockpit else 1.6)
 
     if is_cockpit:
-        # Mira central tática completa no Cockpit
         glBegin(GL_LINES)
         glVertex2f(cx - 22.0, cy); glVertex2f(cx - 7.0, cy)
         glVertex2f(cx + 7.0, cy);  glVertex2f(cx + 22.0, cy)
@@ -322,7 +293,6 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
         glVertex2f(cx, cy + 7.0);  glVertex2f(cx, cy + 22.0)
         glEnd()
     else:
-        # Marcadores laterais discretos de linha d'água (deixando o F-14 totalmente livre no centro)
         glBegin(GL_LINES)
         glVertex2f(cx - 50.0, cy); glVertex2f(cx - 36.0, cy)
         glVertex2f(cx - 36.0, cy); glVertex2f(cx - 36.0, cy - 5.0)
@@ -330,7 +300,6 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
         glVertex2f(cx + 36.0, cy); glVertex2f(cx + 36.0, cy - 5.0)
         glEnd()
 
-    # 2. Janela de recorte (glScissor) para a Escada de Arfagem (Pitch Ladder)
     ladder_half_w = 165.0
     ladder_half_h = 148.0
     glEnable(GL_SCISSOR_TEST)
@@ -346,37 +315,31 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
     glRotatef(-roll_deg, 0.0, 0.0, 1.0)
     glTranslatef(0.0, -pitch_deg * px_per_deg, 0.0)
 
-    # Linha do Horizonte Real (0 graus)
     glColor4f(0.22, 1.0, 0.45, alpha_main)
     glLineWidth(2.0)
     glBegin(GL_LINES)
     glVertex2f(-outer_span - 24.0, 0.0); glVertex2f(-inner_gap, 0.0)
     glVertex2f( inner_gap, 0.0);         glVertex2f( outer_span + 24.0, 0.0)
-    # Pequenos traços verticais nas pontas internas do horizonte
     glVertex2f(-inner_gap, 0.0); glVertex2f(-inner_gap, -6.0)
     glVertex2f( inner_gap, 0.0); glVertex2f( inner_gap, -6.0)
     glEnd()
 
-    # Escada de Ângulos de Arfagem (Pitch Rungs de -80° a +80° em passos de 5°/10°)
     glLineWidth(1.5)
     pitch_steps = [-80, -70, -60, -50, -40, -30, -20, -15, -10, -5, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80]
     for deg in pitch_steps:
-        # Só desenha os degraus próximos do pitch atual para máxima limpeza e performance
         if abs(deg - pitch_deg) > 36.0:
             continue
 
         y_r = deg * px_per_deg
         x_in = inner_gap + 4.0
         x_out = outer_span - (12.0 if abs(deg) % 10 != 0 else 0.0)
-        tip_dy = -6.0 if deg > 0 else 6.0  # Pontas apontam em direção ao horizonte (0°)
+        tip_dy = -6.0 if deg > 0 else 6.0
 
         glBegin(GL_LINES)
         if deg > 0:
-            # Arfagem positiva (subida): linha contínua
             glVertex2f(-x_out, y_r); glVertex2f(-x_in, y_r)
             glVertex2f( x_in,  y_r); glVertex2f( x_out, y_r)
         else:
-            # Arfagem negativa (mergulho): linha tracejada em 3 segmentos
             for side in (-1.0, 1.0):
                 seg_len = (x_out - x_in) / 5.0
                 for s in (0, 2, 4):
@@ -384,12 +347,10 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
                     xb = side * (x_in + (s + 1) * seg_len)
                     glVertex2f(xa, y_r); glVertex2f(xb, y_r)
 
-        # Dobras verticais nas extremidades internas de cada degrau
         glVertex2f(-x_in, y_r); glVertex2f(-x_in, y_r + tip_dy)
         glVertex2f( x_in, y_r); glVertex2f( x_in, y_r + tip_dy)
         glEnd()
 
-        # Numeração do ângulo de arfagem nas extremidades externas (a cada 10°)
         if abs(deg) % 10 == 0:
             label = f"{abs(deg)}"
             draw_vector_text(label, -x_out - 6.0, y_r - 4.0, scale=8.0, align="right")
@@ -398,7 +359,6 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
     glPopMatrix()
     glDisable(GL_SCISSOR_TEST)
 
-    # 3. Arco Superior de Escala de Rolagem (Bank Angle Indicator)
     bank_r = ladder_half_h + 10.0
     glColor4f(0.20, 0.95, 0.42, alpha_main * 0.85)
     glLineWidth(1.4)
@@ -411,7 +371,6 @@ def _draw_artificial_horizon(width, height, aircraft, camera_mode):
         glVertex2f(cx + (bank_r + tk_len) * ca, cy + (bank_r + tk_len) * sa)
     glEnd()
 
-    # Ponteiro móvel do ângulo de rolagem (Roll Pointer)
     clamped_roll = np.clip(roll_deg, -65.0, 65.0)
     ptr_rad = math.radians(90.0 + clamped_roll)
     px_tip = cx + (bank_r - 2.0) * math.cos(ptr_rad)
@@ -437,9 +396,7 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
     alt_ft = float(aircraft.pos[1]) * 10.0
     vsi_fpm = float(aircraft.forward[1] * aircraft.speed) * 600.0 if not aircraft.on_ground else 0.0
 
-    # ==========================================================================
-    # 1. FITA DE VELOCIDADE (ESQUERDA — AIRSPEED IN KNOTS)
-    # ==========================================================================
+    # 1. Fita de Velocidade (Esquerda)
     spd_x = max(92.0, cx - 285.0)
     _draw_hud_panel_box(
         spd_x - 58.0, cy - tape_half_h,
@@ -452,7 +409,6 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
     glColor4f(0.35, 1.0, 0.55, 0.95)
     draw_vector_text("SPD KT", spd_x - 23.0, cy + tape_half_h + 7.0, scale=8.5, align="center")
 
-    # Escala deslizante de velocidade (ticks a cada 20 kt, números a cada 100 kt)
     glEnable(GL_SCISSOR_TEST)
     glScissor(int(spd_x - 57.0), int(cy - tape_half_h + 1), 68, int(tape_h - 2))
 
@@ -471,7 +427,6 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
         if k_val % 100 == 0:
             draw_vector_text(f"{k_val}", spd_x - 2.0, y_pos - 4.0, scale=8.0, align="right")
 
-    # Marca vermelha/âmbar de velocidade máxima efetiva na fita
     y_max = cy + (max_kt - speed_kt) * px_per_kt
     if cy - tape_half_h <= y_max <= cy + tape_half_h:
         glColor4f(1.0, 0.65, 0.15, 0.95)
@@ -482,7 +437,6 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
 
     glDisable(GL_SCISSOR_TEST)
 
-    # Caixa digital central de leitura da velocidade atual
     _draw_hud_panel_box(
         spd_x - 68.0, cy - 13.0,
         spd_x + 16.0, cy + 13.0,
@@ -493,15 +447,12 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
     glColor4f(0.45, 1.0, 0.62, 1.0)
     draw_vector_text(f"{speed_kt:04.0f}", spd_x + 8.0, cy - 5.5, scale=11.0, align="right")
 
-    # Sub-leituras abaixo da fita de velocidade: Limite Máximo Efetivo e Número Mach
     mach_num = speed_kt / 661.5
     glColor4f(0.65, 1.0, 0.75, 0.92)
     draw_vector_text(f"MAX {max_kt:.0f} KT", spd_x - 56.0, cy - tape_half_h - 16.0, scale=8.2, align="left")
     draw_vector_text(f"MACH {mach_num:.2f}", spd_x - 56.0, cy - tape_half_h - 30.0, scale=8.2, align="left")
 
-    # ==========================================================================
-    # 2. FITA DE ALTITUDE (DIREITA — ALTIMETER IN FEET)
-    # ==========================================================================
+    # 2. Fita de Altitude (Direita)
     alt_x = min(width - 92.0, cx + 285.0)
     _draw_hud_panel_box(
         alt_x - 12.0, cy - tape_half_h,
@@ -534,7 +485,6 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
 
     glDisable(GL_SCISSOR_TEST)
 
-    # Caixa digital central de leitura da altitude atual
     _draw_hud_panel_box(
         alt_x - 16.0, cy - 13.0,
         alt_x + 68.0, cy + 13.0,
@@ -545,7 +495,6 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
     glColor4f(0.45, 1.0, 0.62, 1.0)
     draw_vector_text(f"{alt_ft:04.0f}", alt_x - 8.0, cy - 5.5, scale=11.0, align="left")
 
-    # Sub-leituras abaixo da fita de altitude: Razão Vertical (VSI) e Atitude Numérica
     pitch_deg = math.degrees(math.asin(np.clip(float(aircraft.forward[1]), -1.0, 1.0)))
     roll_deg = math.degrees(math.atan2(float(aircraft.right[1]), float(aircraft.up[1])))
     glColor4f(0.65, 1.0, 0.75, 0.92)
@@ -559,20 +508,12 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
 
 def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time):
     """
-    Renderiza os dois painéis inferiores da aeronave:
-      - Inferior Esquerdo: Estado da Aeronave (NO CONVÉS / EM VOO / STALL),
-        Barra de Throttle (%) e Pós-Combustor (Afterburner [E]).
-      - Inferior Direito: Trem de Pouso Retrátil [Q] (com luzes de 3 rodas) e
-        Ângulo de Enflecamento das Asas [G] (com silhueta 2D animada do F-14).
+    Renderiza os dois painéis inferiores da aeronave.
     """
-    # --------------------------------------------------------------------------
-    # PAINEL INFERIOR ESQUERDO: STATUS DE VOO, THROTTLE E AFTERBURNER
-    # --------------------------------------------------------------------------
     lx0, ly0 = 22.0, 20.0
     lx1, ly1 = 278.0, 128.0
     _draw_hud_panel_box(lx0, ly0, lx1, ly1, cut=6.0)
 
-    # 1. Estado da Aeronave (NO CONVES vs EM VOO vs ALERTA DE STALL)
     is_stalling = (scene_mode != 3) and (not aircraft.on_ground) and (aircraft.speed < aircraft.min_flight_speed * 1.05)
     if scene_mode == 3:
         status_txt = "STATUS: MODO INSPECAO"
@@ -591,7 +532,6 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     glColor4f(*status_col)
     draw_vector_text(status_txt, lx0 + 12.0, ly1 - 22.0, scale=9.5, align="left")
 
-    # 2. Barra Horizontal de Potência (Throttle W/S)
     thr_pct = int(round(float(aircraft.throttle) * 100.0))
     glColor4f(0.65, 1.0, 0.75, 0.95)
     draw_vector_text(f"THR [W/S]: {thr_pct:03d}%", lx0 + 12.0, ly1 - 48.0, scale=8.5, align="left")
@@ -618,7 +558,6 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     glVertex2f(bar_x0 + 2.0, bar_y0 + bar_h - 2.0)
     glEnd()
 
-    # 3. Indicador de Pós-Combustor (Afterburner [E])
     if aircraft.afterburner:
         ab_pulse = 0.80 + 0.20 * math.sin(sim_time * 14.0)
         glColor4f(1.0, 0.60, 0.14, ab_pulse)
@@ -627,15 +566,11 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         glColor4f(0.35, 0.80, 0.48, 0.80)
         draw_vector_text("AB [E]: DESLIGADO [MIL]", lx0 + 12.0, ly0 + 12.0, scale=8.8, align="left")
 
-    # --------------------------------------------------------------------------
-    # PAINEL INFERIOR DIREITO: TREM DE POUSO [Q] E GEOMETRIA DAS ASAS [G]
-    # --------------------------------------------------------------------------
     rx1 = width - 22.0
     rx0 = rx1 - 268.0
     ry0, ry1 = 20.0, 128.0
     _draw_hud_panel_box(rx0, ry0, rx1, ry1, cut=6.0)
 
-    # 1. Estado do Trem de Pouso Retrátil [Q] + Indicadores de 3 Rodas (Nose + Left/Right Main)
     if aircraft.gear_deploy > 0.95:
         gear_txt = "TREM [Q]: BAIXADO"
         gear_col = (0.28, 1.0, 0.48, 1.0)
@@ -649,7 +584,6 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     glColor4f(*gear_col)
     draw_vector_text(gear_txt, rx0 + 12.0, ry1 - 24.0, scale=8.8, align="left")
 
-    # Luzes esquemáticas das 3 pernas do trem de pouso (Nariz no topo, Principais na base)
     gx_center = rx0 + 48.0
     gy_center = ry1 - 54.0
     wheel_offsets = [(0.0, 10.0), (-14.0, -6.0), (14.0, -6.0)]
@@ -677,7 +611,6 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
             glVertex2f(gx_center + wx - 4.0, gy_center + wy + 2.0)
             glEnd()
 
-    # 2. Enflecamento das Asas [G] + Silhueta 2D Dinâmica do F-14 Tomcat
     sweep_mode_str = "AUTO" if aircraft.auto_wing_sweep else "MAN"
     glColor4f(0.35, 1.0, 0.55, 0.95)
     draw_vector_text(
@@ -685,7 +618,6 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         rx0 + 12.0, ry0 + 12.0, scale=8.8, align="left"
     )
 
-    # Desenho esquemático 2D do F-14 no lado direito do painel com asas que rotacionam ao vivo
     icon_x = rx1 - 46.0
     icon_y = ry0 + 54.0
     sweep_rad = math.radians(float(aircraft.wing_sweep_angle))
@@ -693,27 +625,22 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     glColor4f(0.30, 1.0, 0.52, 0.90)
     glLineWidth(1.6)
     glBegin(GL_LINES)
-    # Fuselagem e radome na silhueta 2D
     glVertex2f(icon_x, icon_y + 28.0); glVertex2f(icon_x - 5.0, icon_y + 8.0)
     glVertex2f(icon_x, icon_y + 28.0); glVertex2f(icon_x + 5.0, icon_y + 8.0)
     glVertex2f(icon_x - 5.0, icon_y + 8.0); glVertex2f(icon_x - 6.0, icon_y - 22.0)
     glVertex2f(icon_x + 5.0, icon_y + 8.0); glVertex2f(icon_x + 6.0, icon_y - 22.0)
-    # Tailerons traseiros
     glVertex2f(icon_x - 6.0, icon_y - 16.0); glVertex2f(icon_x - 15.0, icon_y - 24.0)
     glVertex2f(icon_x + 6.0, icon_y - 16.0); glVertex2f(icon_x + 15.0, icon_y - 24.0)
     glEnd()
 
-    # Asas móveis na silhueta 2D (pivôs em icon_x +- 6, icon_y + 6)
     wing_len = 24.0
     wx_span = wing_len * math.cos(sweep_rad)
     wy_back = wing_len * math.sin(sweep_rad)
     glColor4f(0.55, 1.0, 0.70, 1.0)
     glLineWidth(2.2)
     glBegin(GL_LINES)
-    # Asa esquerda
     glVertex2f(icon_x - 5.0, icon_y + 6.0)
     glVertex2f(icon_x - 5.0 - wx_span, icon_y + 6.0 - wy_back)
-    # Asa direita
     glVertex2f(icon_x + 5.0, icon_y + 6.0)
     glVertex2f(icon_x + 5.0 + wx_span, icon_y + 6.0 - wy_back)
     glEnd()
@@ -746,16 +673,9 @@ def draw_flight_hud(width, height, aircraft, camera_mode=1, scene_mode=1, sim_ti
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glEnable(GL_LINE_SMOOTH)
 
-    # 1. Bússola deslizante (Heading Tape) + Coordenadas GPS no topo
     _draw_compass_and_gps(width, height, aircraft, scene_mode)
-
-    # 2. Horizonte Artificial com Escala de Ângulo de Arfagem (Pitch Ladder)
     _draw_artificial_horizon(width, height, aircraft, camera_mode)
-
-    # 3. Fitas verticais de Velocidade (kt) e Altitude (ft)
     _draw_speed_and_altitude_tapes(width, height, aircraft)
-
-    # 4. Painéis inferiores de Estado, Potência, Afterburner, Trem de Pouso e Asas
     _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
 
     glPopAttrib()
@@ -788,7 +708,6 @@ def draw_crash_overlay(width, height, crash_reason="IMPACTO DETECTADO!"):
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glEnable(GL_LINE_SMOOTH)
 
-    # Filtro vermelho translúcido sobre toda a tela
     glColor4f(0.75, 0.08, 0.06, 0.38)
     glBegin(GL_QUADS)
     glVertex2f(0, 0)
@@ -799,7 +718,6 @@ def draw_crash_overlay(width, height, crash_reason="IMPACTO DETECTADO!"):
 
     cx, cy = width * 0.5, height * 0.5
 
-    # Moldura central de Alerta Crítico
     _draw_hud_panel_box(
         cx - 290.0, cy - 58.0,
         cx + 290.0, cy + 62.0,

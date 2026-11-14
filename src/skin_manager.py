@@ -8,15 +8,14 @@ Gerenciador de Skins do F-14 Tomcat:
   - 5 Paletas de Cores para Camuflagem (arctic, desert, navy, urban, woodland)
     mapeadas a partir dos canais de alto contraste:
     [Vermelho Vivo, Verde Claro, Azul Escuro, Preto].
+Inclui filtragem anisotrópica e texturas 1024x1024 para nitidez em ângulos rasantes.
 ================================================================================
 """
 
-# TODO: fix metallic and camo pattern distortions
-
 import os
-import math
 import numpy as np
 from OpenGL.GL import *
+from OpenGL.GLU import *
 
 try:
     from PIL import Image
@@ -24,7 +23,11 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-from renderer_utils import _resolve_asset_path, upload_texture_rgb
+from renderer_utils import _resolve_asset_path
+
+# Constantes OpenGL para Filtragem Anisotrópica (elimina borrado em ângulos oblíquos nas asas/dorso)
+GL_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FE
+GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF
 
 
 # ==============================================================================
@@ -164,13 +167,42 @@ SKIN_PATTERNS = [
 
 
 # ==============================================================================
-# 3. PROCESSAMENTO DE IMAGEM E FALLBACKS PROCEDURAIS
+# 3. UPLOAD COM FILTRAGEM ANISOTRÓPICA E PROCESSAMENTO DE MÁSCARAS
 # ==============================================================================
 
-def _load_raw_asset_rgb(filename, target_size=512, preserve_sharp_pixels=False):
+def _upload_skin_texture_rgb(img):
     """
-    Carrega a imagem de 'assets/' sem cortar bordas escuras (evitando perda em
-    matte_black_steel ou máscaras pretas) e redimensiona para target_size x target_size.
+    Envia a textura de skin 1024x1024 ao OpenGL com GL_MIRRORED_REPEAT, Mipmaps
+    e Filtragem Anisotrópica (até 16x), garantindo máxima nitidez em superfícies
+    vistas em ângulo rasante (asas, luvas e dorso).
+    """
+    img = np.ascontiguousarray(img, dtype=np.uint8)
+    height, width = img.shape[:2]
+    tex_id = glGenTextures(1)
+    glBindTexture(GL_TEXTURE_2D, tex_id)
+
+    wrap_mode = GL_MIRRORED_REPEAT if ("GL_MIRRORED_REPEAT" in globals()) else GL_REPEAT
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_mode)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_mode)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+
+    # Ativa filtragem anisotrópica na GPU se disponível
+    try:
+        max_aniso = glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT)
+        if max_aniso and max_aniso > 1.0:
+            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, min(16.0, float(max_aniso)))
+    except Exception:
+        pass
+
+    gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGB, width, height, GL_RGB, GL_UNSIGNED_BYTE, img)
+    return tex_id
+
+
+def _load_raw_asset_rgb(filename, target_size=1024, preserve_sharp_pixels=False):
+    """
+    Carrega a imagem de 'assets/' preservando 100% da área útil e redimensiona
+    para 1024x1024 para preservar todos os detalhes originais (768x768 / 800x800).
     """
     asset_path = _resolve_asset_path(filename)
     if asset_path is not None and PIL_AVAILABLE:
@@ -178,8 +210,8 @@ def _load_raw_asset_rgb(filename, target_size=512, preserve_sharp_pixels=False):
             with Image.open(asset_path) as im:
                 im_rgb = im.convert("RGB")
                 if im_rgb.size != (target_size, target_size):
-                    resample_Namespace = getattr(Image, "Resampling", Image)
-                    interp = resample_Namespace.NEAREST if preserve_sharp_pixels else resample_Namespace.LANCZOS
+                    resample_ns = getattr(Image, "Resampling", Image)
+                    interp = resample_ns.NEAREST if preserve_sharp_pixels else resample_ns.LANCZOS
                     im_rgb = im_rgb.resize((target_size, target_size), interp)
                 arr = np.array(im_rgb, dtype=np.uint8)
             print(f"[Skins] Asset carregado: '{os.path.basename(asset_path)}' ({target_size}x{target_size})")
@@ -191,7 +223,7 @@ def _load_raw_asset_rgb(filename, target_size=512, preserve_sharp_pixels=False):
     return None
 
 
-def _generate_fallback_metallic(pattern_id, size=512):
+def _generate_fallback_metallic(pattern_id, size=1024):
     """Fallback procedural caso algum asset metálico não seja encontrado."""
     y, x = np.mgrid[0:size, 0:size].astype(np.float32)
     streak = np.sin(x * 0.35) * 6.0 + np.sin(x * 1.15 + y * 0.05) * 4.0 + np.cos(y * 0.08) * 3.0
@@ -207,7 +239,7 @@ def _generate_fallback_metallic(pattern_id, size=512):
     return img
 
 
-def _generate_fallback_camo_mask(pattern_id, size=512):
+def _generate_fallback_camo_mask(pattern_id, size=1024):
     """
     Gera máscara procedural nas 4 cores de alto contraste (Vermelho, Verde, Azul, Preto)
     caso algum arquivo de camuflagem não seja encontrado em assets/.
@@ -216,16 +248,16 @@ def _generate_fallback_camo_mask(pattern_id, size=512):
     mask = np.zeros((size, size, 3), dtype=np.uint8)
 
     if pattern_id == "digital":
-        bx = (x // 16).astype(np.int32)
-        by = (y // 16).astype(np.int32)
+        bx = (x // 24).astype(np.int32)
+        by = (y // 24).astype(np.int32)
         h = (bx * 374761393 + by * 668265263) % 100
         idx = np.select([h < 18, h < 52, h < 78], [0, 1, 2], default=3)
     elif pattern_id == "tiger_stripes":
-        wave = np.sin(y * 0.055 + np.sin(x * 0.025) * 2.2) + 0.45 * np.cos(x * 0.04 - y * 0.03)
+        wave = np.sin(y * 0.035 + np.sin(x * 0.016) * 2.2) + 0.45 * np.cos(x * 0.025 - y * 0.02)
         idx = np.select([wave > 0.45, wave > -0.15], [3, 1], default=2)
     else:  # blobs
-        v1 = np.sin(x * 0.024) * np.cos(y * 0.024) + 0.5 * np.sin((x + y) * 0.018)
-        v2 = np.cos(x * 0.031 - y * 0.022)
+        v1 = np.sin(x * 0.015) * np.cos(y * 0.015) + 0.5 * np.sin((x + y) * 0.012)
+        v2 = np.cos(x * 0.020 - y * 0.014)
         idx = np.select([v1 > 0.45, v2 > 0.35, v1 < -0.25], [1, 0, 2], default=3)
 
     ref_u8 = MASK_REFERENCE_RGB.astype(np.uint8)
@@ -238,14 +270,12 @@ def apply_camo_palette_replacement(mask_rgb, palette_key, sharp_edges=False):
     Substitui os 4 canais de alto contraste (Vermelho vivo, Verde claro, Azul escuro, Preto)
     pelas cores correspondentes da paleta selecionada.
       - Para 'digital', usa classificação direta (argmin) para manter os pixels nítidos.
-      - Para 'tiger_stripes' e 'blobs', usa interpolação inversa da distância entre os
-        2 canais mais próximos, preservando bordas anti-aliased suaves sem misturar
-        cores não adjacentes.
+      - Para 'tiger_stripes' e 'blobs', preserva cores 100% puras no interior das manchas
+        e aplica suavização apenas na fronteira imediata entre duas cores (expoente 5.5).
     """
     palette_colors = CAMO_PALETTES[palette_key]["colors"].astype(np.float32)
     img_f = mask_rgb.astype(np.float32)
 
-    # Distância quadrática (H, W, 4) para cada um dos 4 canais de referência
     diffs = img_f[:, :, None, :] - MASK_REFERENCE_RGB[None, None, :, :]
     dist_sq = np.sum(diffs * diffs, axis=-1)
 
@@ -260,20 +290,15 @@ def apply_camo_palette_replacement(mask_rgb, palette_key, sharp_edges=False):
         d1 = np.take_along_axis(dist_sq, idx1[..., None], axis=-1)[..., 0]
         d2 = np.take_along_axis(dist_sq, idx2[..., None], axis=-1)[..., 0]
 
-        w1 = 1.0 / ((d1 + 1.0) ** 2.2)
-        w2 = 1.0 / ((d2 + 1.0) ** 2.2)
+        w1 = 1.0 / ((d1 + 1.0) ** 5.5)
+        w2 = 1.0 / ((d2 + 1.0) ** 5.5)
         alpha = (w1 / (w1 + w2))[..., None]
 
         c1 = palette_colors[idx1]
         c2 = palette_colors[idx2]
         out = c1 * alpha + c2 * (1.0 - alpha)
 
-    # Leve micro-textura de chapa aeronáutica para enriquecer a interação com a luz Phong
-    h, w = out.shape[:2]
-    yy, xx = np.mgrid[0:h, 0:w]
-    panel_grain = (((xx * 13 + yy * 29) % 7) - 3.0) * 0.85
-    out = np.clip(out + panel_grain[:, :, None], 0.0, 255.0).astype(np.uint8)
-    return out
+    return np.clip(out, 0.0, 255.0).astype(np.uint8)
 
 
 # ==============================================================================
@@ -283,7 +308,7 @@ def apply_camo_palette_replacement(mask_rgb, palette_key, sharp_edges=False):
 class SkinManager:
     """
     Controla o padrão de skin ativo, a paleta de camuflagem ativa e mantém
-    cache das texturas OpenGL compiladas para troca instantânea em tempo real.
+    cache das texturas OpenGL compiladas para troca instantânea na Cena 3.
     """
     def __init__(self, default_wing_tex_id):
         self.default_wing_tex_id = default_wing_tex_id
@@ -313,8 +338,11 @@ class SkinManager:
         """Retorna True se o padrão atual for um dos 3 padrões de camuflagem."""
         return self.current_pattern["category"] == "camo"
 
-    def next_pattern(self):
-        """Avança para o próximo padrão de skin (Tecla 'K')."""
+    def next_pattern(self, scene_mode=3):
+        """Avança para o próximo padrão de skin (Tecla 'K' — permitido apenas na Cena 3)."""
+        if scene_mode != 3:
+            print("[Skins] A troca de skin só é permitida na Cena 3 de Inspeção (Pressione F3).")
+            return
         self.pattern_index = (self.pattern_index + 1) % len(SKIN_PATTERNS)
         pat = self.current_pattern
         if pat["category"] == "camo":
@@ -323,8 +351,11 @@ class SkinManager:
         else:
             print(f"[Skin] Padrão: {pat['name']}")
 
-    def next_palette(self):
-        """Avança para a próxima paleta de cores de camuflagem (Tecla 'P')."""
+    def next_palette(self, scene_mode=3):
+        """Avança para a próxima paleta de cores de camuflagem (Tecla 'P' — apenas na Cena 3)."""
+        if scene_mode != 3:
+            print("[Skins] A troca de paleta só é permitida na Cena 3 de Inspeção (Pressione F3).")
+            return
         self.palette_index = (self.palette_index + 1) % len(PALETTE_ORDER)
         pal_label = self.current_palette_info["label"]
         if not self.is_camo_active():
@@ -347,10 +378,10 @@ class SkinManager:
         if cat == "metallic":
             cache_key = (pat_id, None)
             if cache_key not in self._gl_texture_cache:
-                arr = _load_raw_asset_rgb(pat["asset"], target_size=512, preserve_sharp_pixels=False)
+                arr = _load_raw_asset_rgb(pat["asset"], target_size=1024, preserve_sharp_pixels=False)
                 if arr is None:
-                    arr = _generate_fallback_metallic(pat_id, size=512)
-                self._gl_texture_cache[cache_key] = upload_texture_rgb(arr, mirrored_repeat=True, use_mipmaps=True)
+                    arr = _generate_fallback_metallic(pat_id, size=1024)
+                self._gl_texture_cache[cache_key] = _upload_skin_texture_rgb(arr)
             return self._gl_texture_cache[cache_key]
 
         # Categoria 'camo': combina máscara de alto contraste + paleta ativa
@@ -359,9 +390,9 @@ class SkinManager:
         if cache_key not in self._gl_texture_cache:
             if pat_id not in self._raw_mask_cache:
                 is_digital = (pat_id == "digital")
-                raw_mask = _load_raw_asset_rgb(pat["asset"], target_size=512, preserve_sharp_pixels=is_digital)
+                raw_mask = _load_raw_asset_rgb(pat["asset"], target_size=1024, preserve_sharp_pixels=is_digital)
                 if raw_mask is None:
-                    raw_mask = _generate_fallback_camo_mask(pat_id, size=512)
+                    raw_mask = _generate_fallback_camo_mask(pat_id, size=1024)
                 self._raw_mask_cache[pat_id] = raw_mask
 
             colored_arr = apply_camo_palette_replacement(
@@ -369,14 +400,12 @@ class SkinManager:
                 pal_key,
                 sharp_edges=(pat_id == "digital")
             )
-            self._gl_texture_cache[cache_key] = upload_texture_rgb(
-                colored_arr, mirrored_repeat=True, use_mipmaps=True
-            )
+            self._gl_texture_cache[cache_key] = _upload_skin_texture_rgb(colored_arr)
 
         return self._gl_texture_cache[cache_key]
 
     def get_hud_summary(self):
-        """Retorna strings formatadas para exibição no HUD e na Cena 3."""
+        """Retorna strings formatadas para exibição no painel da Cena 3."""
         pat = self.current_pattern
         if pat["category"] == "camo":
             return pat["name"], self.current_palette_info["label"], self.current_palette_info["colors"]

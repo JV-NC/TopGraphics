@@ -3,7 +3,8 @@
 TopGraphics | f14_model.py
 Modelo low-poly de alta fidelidade do F-14 Tomcat: fuselagem por seções transversais, canopy,
 naceles, asas de geometria variável, trem de pouso retrátil, profundores, pós-combustores
-e suporte completo ao Sistema de Customização de Skins (Padrão, Metálicas e Camuflagens).
+e suporte completo ao Sistema de Customização de Skins (Padrão, Metálicas e Camuflagens)
+com Mapeamento UV Triplanar Métrico (livre de distorções de aspecto ou cisalhamento).
 ================================================================================
 """
 
@@ -11,22 +12,123 @@ import math
 import numpy as np
 from OpenGL.GL import *
 
+from math_utils import compute_normal
 from renderer_utils import (
     draw_box, draw_quad_with_normal, draw_tri_with_normal, upload_texture_rgb
 )
+
+# Escala métrica uniforme para mapeamento UV triplanar das skins (unidades de textura por metro)
+# Garante texels 100% quadrados e contínuos em todas as chapas da aeronave, sem esticar!
+SKIN_UV_SCALE = 0.42
+SKIN_UV_OFFSET = 0.37
+
+
+# ==============================================================================
+# MAPEAMENTO UV TRIPLANAR MÉTRICO
+# ==============================================================================
+
+def _project_planar_uv(vertex, normal, scale=SKIN_UV_SCALE):
+    """
+    Calcula coordenadas (u, v) diretamente a partir da posição métrica 3D (x, y, z)
+    do vértice projetada no plano dominante da normal da superfície (Box/Triplanar Mapping).
+    Elimina completamente o estiramento em caixas longas (espinha dorsal, asas)
+    e o cisalhamento diagonal em trapézios (seções da fuselagem, luvas e tailerons).
+    """
+    vx, vy, vz = float(vertex[0]), float(vertex[1]), float(vertex[2])
+    nx, ny, nz = abs(float(normal[0])), abs(float(normal[1])), abs(float(normal[2]))
+
+    if ny >= nx and ny >= nz:
+        # Superfícies predominantemente horizontais (dorso, ventre, asas, tailerons, luvas)
+        u = vx * scale + SKIN_UV_OFFSET
+        v = vz * scale + SKIN_UV_OFFSET
+    elif nx >= ny and nx >= nz:
+        # Superfícies predominantemente laterais (laterais das naceles, derivas, lemes, fuselagem)
+        u = vz * scale + SKIN_UV_OFFSET
+        v = vy * scale + SKIN_UV_OFFSET
+    else:
+        # Superfícies frontais/traseiras
+        u = vx * scale + SKIN_UV_OFFSET
+        v = vy * scale + SKIN_UV_OFFSET
+
+    return u, v
+
+
+def draw_quad_planar_uv(p1, p2, p3, p4, scale=SKIN_UV_SCALE):
+    """Desenha um quadrilátero com normal automática e projeção UV métrica sem distorção."""
+    n = compute_normal(p1, p2, p3)
+    glNormal3fv(n)
+    for pt in (p1, p2, p3, p4):
+        u, v = _project_planar_uv(pt, n, scale)
+        glTexCoord2f(u, v)
+        glVertex3fv(pt)
+
+
+def draw_tri_planar_uv(p1, p2, p3, scale=SKIN_UV_SCALE):
+    """Desenha um triângulo com normal automática e projeção UV métrica sem distorção."""
+    n = compute_normal(p1, p2, p3)
+    glNormal3fv(n)
+    for pt in (p1, p2, p3):
+        u, v = _project_planar_uv(pt, n, scale)
+        glTexCoord2f(u, v)
+        glVertex3fv(pt)
+
+
+def draw_box_planar_uv(dx, dy, dz, scale=SKIN_UV_SCALE):
+    """
+    Desenha um paralelepípedo centrado na origem onde cada face recebe coordenadas UV
+    proporcionais às suas dimensões reais em metros (dx, dy, dz), evitando estiramento.
+    """
+    hx, hy, hz = dx * 0.5, dy * 0.5, dz * 0.5
+    glBegin(GL_QUADS)
+    draw_quad_planar_uv([-hx,  hy, -hz], [-hx,  hy,  hz], [ hx,  hy,  hz], [ hx,  hy, -hz], scale)
+    draw_quad_planar_uv([-hx, -hy,  hz], [-hx, -hy, -hz], [ hx, -hy, -hz], [ hx, -hy,  hz], scale)
+    draw_quad_planar_uv([ hx, -hy, -hz], [-hx, -hy, -hz], [-hx,  hy, -hz], [ hx,  hy, -hz], scale)
+    draw_quad_planar_uv([-hx, -hy,  hz], [ hx, -hy,  hz], [ hx,  hy,  hz], [-hx,  hy,  hz], scale)
+    draw_quad_planar_uv([ hx, -hy,  hz], [ hx, -hy, -hz], [ hx,  hy, -hz], [ hx,  hy,  hz], scale)
+    draw_quad_planar_uv([-hx, -hy, -hz], [-hx, -hy,  hz], [-hx,  hy,  hz], [-hx,  hy, -hz], scale)
+    glEnd()
+
+
+def draw_surface_quad(p1, p2, p3, p4, uv_scale=1.0, planar_uv=False):
+    """Seleciona entre UV métrico triplanar (para skins customizadas) ou UV local padrão."""
+    if planar_uv:
+        draw_quad_planar_uv(p1, p2, p3, p4, SKIN_UV_SCALE)
+    else:
+        draw_quad_with_normal(p1, p2, p3, p4, uv_scale)
+
+
+def draw_surface_tri(p1, p2, p3, planar_uv=False):
+    """Seleciona entre UV métrico triplanar (para skins customizadas) ou UV local padrão."""
+    if planar_uv:
+        draw_tri_planar_uv(p1, p2, p3, SKIN_UV_SCALE)
+    else:
+        draw_tri_with_normal(p1, p2, p3)
+
+
+def draw_surface_box(dx, dy, dz, uv_scale=1.0, planar_uv=False):
+    """Seleciona entre caixa com UV métrico proporcional ou caixa padrão."""
+    if planar_uv:
+        draw_box_planar_uv(dx, dy, dz, SKIN_UV_SCALE)
+    else:
+        draw_box(dx, dy, dz, uv_scale)
 
 
 # ==============================================================================
 # UTILITÁRIOS GEOMÉTRICOS DO MODELO
 # ==============================================================================
 
-def draw_cylinder_z(r1, r2, z1, z2, segments=12, y_scale=1.0, x_scale=1.0, cap_start=False, cap_end=False):
-    """Desenha um cilindro/tronco de cone ao longo do eixo Z com coordenadas UV."""
+def draw_cylinder_z(
+    r1, r2, z1, z2, segments=12, y_scale=1.0, x_scale=1.0,
+    cap_start=False, cap_end=False, planar_uv=False
+):
+    """Desenha um cilindro/tronco de cone ao longo do eixo Z com suporte a UV métrico."""
     dz = z2 - z1
     dr = r2 - r1
     length = math.hypot(dz, dr)
     nz_slope = -dr / length if length > 1e-6 else 0.0
     nr_slope = dz / length if length > 1e-6 else 1.0
+    r_avg = max(0.15, 0.5 * (r1 + r2))
+    circumference = 2.0 * math.pi * r_avg
 
     glBegin(GL_QUAD_STRIP)
     for i in range(segments + 1):
@@ -39,10 +141,25 @@ def draw_cylinder_z(r1, r2, z1, z2, segments=12, y_scale=1.0, x_scale=1.0, cap_s
         n_len = math.sqrt(nx * nx + ny * ny + nz * nz)
         if n_len > 1e-6:
             glNormal3f(nx / n_len, ny / n_len, nz / n_len)
-        glTexCoord2f(i / float(segments), 0.0)
-        glVertex3f(r1 * ca * x_scale, r1 * sa * y_scale, z1)
-        glTexCoord2f(i / float(segments), 1.0)
-        glVertex3f(r2 * ca * x_scale, r2 * sa * y_scale, z2)
+
+        x1 = r1 * ca * x_scale
+        y1 = r1 * sa * y_scale
+        x2 = r2 * ca * x_scale
+        y2 = r2 * sa * y_scale
+
+        if planar_uv:
+            u_arc = (i / float(segments)) * circumference * SKIN_UV_SCALE + SKIN_UV_OFFSET
+            v1 = z1 * SKIN_UV_SCALE + SKIN_UV_OFFSET
+            v2 = z2 * SKIN_UV_SCALE + SKIN_UV_OFFSET
+            glTexCoord2f(u_arc, v1)
+            glVertex3f(x1, y1, z1)
+            glTexCoord2f(u_arc, v2)
+            glVertex3f(x2, y2, z2)
+        else:
+            glTexCoord2f(i / float(segments), 0.0)
+            glVertex3f(x1, y1, z1)
+            glTexCoord2f(i / float(segments), 1.0)
+            glVertex3f(x2, y2, z2)
     glEnd()
 
     if cap_start and r1 > 1e-4:
@@ -64,7 +181,7 @@ def draw_cylinder_z(r1, r2, z1, z2, segments=12, y_scale=1.0, x_scale=1.0, cap_s
         glEnd()
 
 
-def draw_prism_section(sec1, sec2, tex_scale=0.0):
+def draw_prism_section(sec1, sec2, tex_scale=0.0, planar_uv=False):
     """
     Conecta duas seções transversais octogonais/trapezoidais ao longo de Z.
     Cada seção: (z, w_bot, w_mid, w_top, y_bot, y_mid, y_top)
@@ -86,7 +203,7 @@ def draw_prism_section(sec1, sec2, tex_scale=0.0):
     glBegin(GL_QUADS)
     for k in range(6):
         kn = (k + 1) % 6
-        draw_quad_with_normal(pts1[k], pts2[k], pts2[kn], pts1[kn], tex_scale)
+        draw_surface_quad(pts1[k], pts2[k], pts2[kn], pts1[kn], tex_scale, planar_uv=planar_uv)
     glEnd()
 
 
@@ -482,12 +599,10 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
     """
     Núcleo compartilhado de compilação da fuselagem do F-14:
       - Se full_skin_uv == False: mantém o visual original do VF-84 Jolly Rogers.
-      - Se full_skin_uv == True: habilita mapeamento UV (tex_scale > 0) em todas as
-        chapas externas da fuselagem, naceles, dorso e derivas para receber a textura
-        ativa do SkinManager (Metálica ou Camuflagem).
+      - Se full_skin_uv == True: utiliza Mapeamento UV Triplanar Métrico (planar_uv=True)
+        em todas as chapas da fuselagem, dorso, naceles, luvas e derivas, eliminando
+        qualquer estiramento ou distorção diagonal nas skins metálicas e camuflagens.
     """
-    uv_body = 1.0 if full_skin_uv else 0.0
-
     # 1. Componentes funcionais da ponta do nariz (sempre sem textura de pintura)
     glPushAttrib(GL_TEXTURE_BIT | GL_ENABLE_BIT)
     glDisable(GL_TEXTURE_2D)
@@ -524,13 +639,13 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
 
     # Corpo principal do Radome
     glColor3f(0.95, 0.96, 0.98) if full_skin_uv else glColor3f(0.74, 0.77, 0.81)
-    draw_cylinder_z(0.18, 0.44, -5.85, -4.45, segments=14, y_scale=0.95)
+    draw_cylinder_z(0.18, 0.44, -5.85, -4.45, segments=14, y_scale=0.95, planar_uv=full_skin_uv)
 
     # Carenagem do Casulo TCS sob o queixo
     glColor3f(0.92, 0.93, 0.95) if full_skin_uv else glColor3f(0.66, 0.69, 0.73)
     glPushMatrix()
     glTranslatef(0.0, -0.36, -4.75)
-    draw_box(0.16, 0.14, 0.85, uv_scale=1.0)
+    draw_surface_box(0.16, 0.14, 0.85, uv_scale=1.0, planar_uv=full_skin_uv)
     glPopMatrix()
 
     # Seções octogonais da fuselagem
@@ -554,7 +669,7 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
                 glColor3f(0.68, 0.22, 0.20)
             else:
                 glColor3f(0.73, 0.76, 0.80)
-        draw_prism_section(fuselage_sections[i], fuselage_sections[i + 1], tex_scale=uv_body)
+        draw_prism_section(fuselage_sections[i], fuselage_sections[i + 1], tex_scale=0.0, planar_uv=full_skin_uv)
 
     # Chines laterais inclinados
     glColor3f(0.94, 0.95, 0.97) if full_skin_uv else glColor3f(0.70, 0.73, 0.77)
@@ -562,31 +677,31 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
         glPushMatrix()
         glTranslatef(side * 0.56, 0.08, -2.15)
         glRotatef(-side * 25.0, 0.0, 0.0, 1.0)
-        draw_box(0.22, 0.10, 2.50, uv_scale=1.0)
+        draw_surface_box(0.22, 0.10, 2.50, uv_scale=1.0, planar_uv=full_skin_uv)
         glPopMatrix()
 
-    # Espinha Dorsal Superior e Painéis Inclinados do Pancake
+    # Espinha Dorsal Superior e Painéis Inclinados do Pancake (agora com UV métrico sem esticar!)
     glColor3f(0.96, 0.97, 0.99) if full_skin_uv else glColor3f(0.75, 0.78, 0.82)
     glPushMatrix()
     glTranslatef(0.0, 0.36, 1.45)
-    draw_box(0.68, 0.10, 4.40, uv_scale=1.5)
+    draw_surface_box(0.68, 0.10, 4.40, uv_scale=1.0, planar_uv=full_skin_uv)
     glPopMatrix()
 
     for side in (-1.0, 1.0):
         glPushMatrix()
         glTranslatef(side * 0.68, 0.32, 1.55)
         glRotatef(-side * 7.5, 0.0, 0.0, 1.0)
-        draw_box(0.78, 0.09, 4.20, uv_scale=1.5)
+        draw_surface_box(0.78, 0.09, 4.20, uv_scale=1.0, planar_uv=full_skin_uv)
         glPopMatrix()
 
     # Beaver Tail Traseiro
     glColor3f(0.92, 0.93, 0.95) if full_skin_uv else glColor3f(0.68, 0.71, 0.75)
     glPushMatrix()
     glTranslatef(0.0, 0.06, 5.15)
-    draw_box(0.46, 0.14, 1.15, uv_scale=1.0)
+    draw_surface_box(0.46, 0.14, 1.15, uv_scale=1.0, planar_uv=full_skin_uv)
     glColor3f(0.25, 0.27, 0.30)
     glTranslatef(0.0, 0.0, 0.52)
-    draw_box(0.36, 0.08, 0.18, uv_scale=0.5)
+    draw_surface_box(0.36, 0.08, 0.18, uv_scale=0.5, planar_uv=full_skin_uv)
     glPopMatrix()
 
     # 3. Naceles Duplas, Rampas de Admissão e Quilhas Ventrais
@@ -596,16 +711,16 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
 
         glColor3f(0.92, 0.93, 0.95) if full_skin_uv else glColor3f(0.65, 0.68, 0.72)
         glBegin(GL_QUADS)
-        draw_quad_with_normal([x_out, -0.58, -1.85], [x_out, -0.50, 4.65], [x_out, 0.16, 4.65], [x_out, 0.20, -1.35], 1.5)
-        draw_quad_with_normal([x_in, 0.20, -1.35], [x_in, 0.16, 4.65], [x_in, -0.50, 4.65], [x_in, -0.58, -1.85], 1.5)
-        draw_quad_with_normal([x_in, -0.58, -1.85], [x_in, -0.50, 4.65], [x_out, -0.50, 4.65], [x_out, -0.58, -1.85], 1.5)
-        draw_quad_with_normal([x_in, 0.20, -1.35], [x_out, 0.20, -1.35], [x_out, 0.16, 4.65], [x_in, 0.16, 4.65], 1.5)
+        draw_surface_quad([x_out, -0.58, -1.85], [x_out, -0.50, 4.65], [x_out, 0.16, 4.65], [x_out, 0.20, -1.35], 1.5, planar_uv=full_skin_uv)
+        draw_surface_quad([x_in, 0.20, -1.35], [x_in, 0.16, 4.65], [x_in, -0.50, 4.65], [x_in, -0.58, -1.85], 1.5, planar_uv=full_skin_uv)
+        draw_surface_quad([x_in, -0.58, -1.85], [x_in, -0.50, 4.65], [x_out, -0.50, 4.65], [x_out, -0.58, -1.85], 1.5, planar_uv=full_skin_uv)
+        draw_surface_quad([x_in, 0.20, -1.35], [x_out, 0.20, -1.35], [x_out, 0.16, 4.65], [x_in, 0.16, 4.65], 1.5, planar_uv=full_skin_uv)
         glEnd()
 
         glColor3f(0.95, 0.96, 0.98) if full_skin_uv else glColor3f(0.72, 0.75, 0.79)
         glBegin(GL_QUADS)
-        draw_quad_with_normal([x_in, 0.22, -2.25], [x_out, 0.22, -2.05], [x_out, 0.20, -1.35], [x_in, 0.20, -1.35], 1.0)
-        draw_quad_with_normal([x_out, 0.22, -2.05], [x_out, -0.58, -1.85], [x_out, 0.20, -1.35], [x_out, 0.22, -2.05], 1.0)
+        draw_surface_quad([x_in, 0.22, -2.25], [x_out, 0.22, -2.05], [x_out, 0.20, -1.35], [x_in, 0.20, -1.35], 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad([x_out, 0.22, -2.05], [x_out, -0.58, -1.85], [x_out, 0.20, -1.35], [x_out, 0.22, -2.05], 1.0, planar_uv=full_skin_uv)
         glEnd()
 
         # Quilha Ventral
@@ -614,8 +729,8 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
         glTranslatef(side * 0.78, -0.54, 3.25)
         glRotatef(side * 12.0, 0.0, 0.0, 1.0)
         glBegin(GL_QUADS)
-        draw_quad_with_normal([0.02, 0.05, -0.95], [0.02, 0.05, 0.95], [0.01, -0.32, 0.75], [0.01, -0.26, -0.45], 1.0)
-        draw_quad_with_normal([-0.02, 0.05, 0.95], [-0.02, 0.05, -0.95], [-0.01, -0.26, -0.45], [-0.01, -0.32, 0.75], 1.0)
+        draw_surface_quad([0.02, 0.05, -0.95], [0.02, 0.05, 0.95], [0.01, -0.32, 0.75], [0.01, -0.26, -0.45], 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad([-0.02, 0.05, 0.95], [-0.02, 0.05, -0.95], [-0.01, -0.26, -0.45], [-0.01, -0.32, 0.75], 1.0, planar_uv=full_skin_uv)
         glEnd()
         glPopMatrix()
 
@@ -630,7 +745,7 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
 
     glPopAttrib()
 
-    # 4. Luvas Fixas das Asas (Wing Gloves: sempre com UV ativo)
+    # 4. Luvas Fixas das Asas (Wing Gloves)
     if not full_skin_uv and wing_tex_id is not None:
         glBindTexture(GL_TEXTURE_2D, wing_tex_id)
     glColor3f(0.96, 0.97, 0.99) if full_skin_uv else glColor3f(0.77, 0.79, 0.83)
@@ -648,17 +763,17 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
 
         glBegin(GL_QUADS)
         if side > 0:
-            draw_quad_with_normal(p_front, p_rear, p_outer, p_mid, 1.0)
-            draw_quad_with_normal(b_front, b_mid, b_outer, b_rear, 1.0)
-            draw_quad_with_normal(p_front, p_mid, b_mid, b_front, 1.0)
-            draw_quad_with_normal(p_mid, p_outer, b_outer, b_mid, 1.0)
-            draw_quad_with_normal(p_outer, p_rear, b_rear, b_outer, 1.0)
+            draw_surface_quad(p_front, p_rear, p_outer, p_mid, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(b_front, b_mid, b_outer, b_rear, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(p_front, p_mid, b_mid, b_front, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(p_mid, p_outer, b_outer, b_mid, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(p_outer, p_rear, b_rear, b_outer, 1.0, planar_uv=full_skin_uv)
         else:
-            draw_quad_with_normal(p_front, p_mid, p_outer, p_rear, 1.0)
-            draw_quad_with_normal(b_front, b_rear, b_outer, b_mid, 1.0)
-            draw_quad_with_normal(p_mid, p_front, b_front, b_mid, 1.0)
-            draw_quad_with_normal(p_outer, p_mid, b_mid, b_outer, 1.0)
-            draw_quad_with_normal(p_rear, p_outer, b_outer, b_rear, 1.0)
+            draw_surface_quad(p_front, p_mid, p_outer, p_rear, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(b_front, b_rear, b_outer, b_mid, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(p_mid, p_front, b_front, b_mid, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(p_outer, p_mid, b_mid, b_outer, 1.0, planar_uv=full_skin_uv)
+            draw_surface_quad(p_rear, p_outer, b_outer, b_rear, 1.0, planar_uv=full_skin_uv)
         glEnd()
 
     # 5. Estabilizadores Verticais Duplos Inclinados (Twin Tails)
@@ -673,22 +788,22 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
 
         glColor3f(0.92, 0.93, 0.95) if full_skin_uv else glColor3f(0.68, 0.71, 0.75)
         glBegin(GL_TRIANGLES)
-        draw_tri_with_normal([0.03, 0.0, -1.65], [0.03, 0.0, -0.75], [0.02, 0.28, -0.75])
-        draw_tri_with_normal([-0.03, 0.0, -0.75], [-0.03, 0.0, -1.65], [-0.02, 0.28, -0.75])
+        draw_surface_tri([0.03, 0.0, -1.65], [0.03, 0.0, -0.75], [0.02, 0.28, -0.75], planar_uv=full_skin_uv)
+        draw_surface_tri([-0.03, 0.0, -0.75], [-0.03, 0.0, -1.65], [-0.02, 0.28, -0.75], planar_uv=full_skin_uv)
         glEnd()
 
         glColor3f(0.94, 0.95, 0.97) if full_skin_uv else glColor3f(0.20, 0.22, 0.26)
         glBegin(GL_QUADS)
-        draw_quad_with_normal([0.045, 0.0, -0.80], [0.045, 0.0, 0.88], [0.025, 1.52, 1.15], [0.025, 1.52, 0.25], 1.0)
-        draw_quad_with_normal([-0.045, 0.0, 0.88], [-0.045, 0.0, -0.80], [-0.025, 1.52, 0.25], [-0.025, 1.52, 1.15], 1.0)
-        draw_quad_with_normal([-0.045, 0.0, -0.80], [0.045, 0.0, -0.80], [0.025, 1.52, 0.25], [-0.025, 1.52, 0.25], 1.0)
+        draw_surface_quad([0.045, 0.0, -0.80], [0.045, 0.0, 0.88], [0.025, 1.52, 1.15], [0.025, 1.52, 0.25], 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad([-0.045, 0.0, 0.88], [-0.045, 0.0, -0.80], [-0.025, 1.52, 0.25], [-0.025, 1.52, 1.15], 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad([-0.045, 0.0, -0.80], [0.045, 0.0, -0.80], [0.025, 1.52, 0.25], [-0.025, 1.52, 0.25], 1.0, planar_uv=full_skin_uv)
         glEnd()
 
         # Topo da deriva
         glColor3f(0.96, 0.96, 0.98) if full_skin_uv else glColor3f(0.95, 0.78, 0.15)
         glBegin(GL_QUADS)
-        draw_quad_with_normal([0.03, 1.52, 0.25], [0.03, 1.52, 1.42], [0.02, 1.72, 1.48], [0.02, 1.72, 0.35], 0.5)
-        draw_quad_with_normal([-0.03, 1.52, 1.42], [-0.03, 1.52, 0.25], [-0.02, 1.72, 0.35], [-0.02, 1.72, 1.48], 0.5)
+        draw_surface_quad([0.03, 1.52, 0.25], [0.03, 1.52, 1.42], [0.02, 1.72, 1.48], [0.02, 1.72, 0.35], 0.5, planar_uv=full_skin_uv)
+        draw_surface_quad([-0.03, 1.52, 1.42], [-0.03, 1.52, 0.25], [-0.02, 1.72, 0.35], [-0.02, 1.72, 1.48], 0.5, planar_uv=full_skin_uv)
         glEnd()
 
         if side < 0:
@@ -724,8 +839,8 @@ def build_f14_static_fuselage_list(wing_tex_id):
 
 def build_f14_skinned_fuselage_list():
     """
-    Compila a Display List com mapeamento UV integral para receber dinamicamente
-    qualquer textura de Skin Metálica ou Camuflagem antes do glCallList.
+    Compila a Display List com Mapeamento UV Triplanar Métrico para receber
+    qualquer textura de Skin Metálica ou Camuflagem sem distorção.
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
@@ -739,7 +854,7 @@ def build_f14_skinned_fuselage_list():
 # ==============================================================================
 
 def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_skin_uv=False):
-    """Desenha uma asa móvel do F-14 a partir do seu pivô local (0, 0, 0)."""
+    """Desenha uma asa móvel do F-14 a partir do seu pivô local (0, 0, 0) sem estiramento UV."""
     glBindTexture(GL_TEXTURE_2D, wing_tex_id)
     glColor3f(0.96, 0.97, 0.99) if full_skin_uv else glColor3f(0.75, 0.77, 0.81)
 
@@ -756,15 +871,15 @@ def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_ski
 
     glBegin(GL_QUADS)
     if side > 0:
-        draw_quad_with_normal(root_le, root_mc, tip_mc, tip_le, 1.0)
-        draw_quad_with_normal(root_mc, root_te, tip_te, tip_mc, 1.0)
-        draw_quad_with_normal(root_mc, root_le, tip_le, tip_mb, 1.0)
-        draw_quad_with_normal(root_te, root_mb, tip_mb, tip_te, 1.0)
+        draw_surface_quad(root_le, root_mc, tip_mc, tip_le, 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad(root_mc, root_te, tip_te, tip_mc, 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad(root_mc, root_le, tip_le, tip_mb, 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad(root_te, root_mb, tip_mb, tip_te, 1.0, planar_uv=full_skin_uv)
     else:
-        draw_quad_with_normal(root_mc, root_le, tip_le, tip_mc, 1.0)
-        draw_quad_with_normal(root_te, root_mc, tip_mc, tip_te, 1.0)
-        draw_quad_with_normal(root_le, root_mb, tip_mb, tip_le, 1.0)
-        draw_quad_with_normal(root_mb, root_te, tip_te, tip_mb, 1.0)
+        draw_surface_quad(root_mc, root_le, tip_le, tip_mc, 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad(root_te, root_mc, tip_mc, tip_te, 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad(root_le, root_mb, tip_mb, tip_le, 1.0, planar_uv=full_skin_uv)
+        draw_surface_quad(root_mb, root_te, tip_te, tip_mb, 1.0, planar_uv=full_skin_uv)
     glEnd()
 
     glPushAttrib(GL_TEXTURE_BIT | GL_ENABLE_BIT)
@@ -782,9 +897,9 @@ def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_ski
     s_out_1 = [span * 0.94, 0.01,  0.24]
     s_out_2 = [span * 0.94, 0.02,  0.38]
     if side > 0:
-        draw_quad_with_normal(s_in_1, s_in_2, s_out_2, s_out_1, 1.0)
+        draw_surface_quad(s_in_1, s_in_2, s_out_2, s_out_1, 1.0, planar_uv=full_skin_uv)
     else:
-        draw_quad_with_normal(s_in_2, s_in_1, s_out_1, s_out_2, 1.0)
+        draw_surface_quad(s_in_2, s_in_1, s_out_1, s_out_2, 1.0, planar_uv=full_skin_uv)
     glEnd()
     glPopMatrix()
 
@@ -796,7 +911,7 @@ def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_ski
         glTranslatef(side * 1.85, 0.05, 0.42)
         glRotatef(side * 14.0, 0.0, 1.0, 0.0)
         glRotatef(spoiler_up, 1.0, 0.0, 0.0)
-        draw_box(2.10, 0.02, 0.24, uv_scale=1.0)
+        draw_surface_box(2.10, 0.02, 0.24, uv_scale=1.0, planar_uv=full_skin_uv)
         glPopMatrix()
 
     # Luzes de navegação nas pontas das asas
@@ -875,7 +990,7 @@ def draw_f14_complete(
     else:
         glDisable(GL_TEXTURE_2D)
 
-    # 4. Lemes Articulados nas Derivas Duplas
+    # 4. Lemes Articulados nas Derivas Duplas (com UV métrico sem cisalhamento)
     glColor3f(0.92, 0.93, 0.95) if use_custom_skin else glColor3f(0.26, 0.28, 0.33)
     for side in (-1.0, 1.0):
         glPushMatrix()
@@ -884,12 +999,12 @@ def draw_f14_complete(
         glTranslatef(0.0, 0.0, 0.96)
         glRotatef(aircraft.rudder_yaw, 0.0, 1.0, 0.0)
         glBegin(GL_QUADS)
-        draw_quad_with_normal([0.03, 0.05, 0.0], [0.02, 0.05, 0.36], [0.015, 1.48, 0.46], [0.02, 1.48, 0.16], 0.6)
-        draw_quad_with_normal([-0.03, 0.05, 0.36], [-0.03, 0.05, 0.0], [-0.02, 1.48, 0.16], [-0.015, 1.48, 0.46], 0.6)
+        draw_surface_quad([0.03, 0.05, 0.0], [0.02, 0.05, 0.36], [0.015, 1.48, 0.46], [0.02, 1.48, 0.16], 0.6, planar_uv=use_custom_skin)
+        draw_surface_quad([-0.03, 0.05, 0.36], [-0.03, 0.05, 0.0], [-0.02, 1.48, 0.16], [-0.015, 1.48, 0.46], 0.6, planar_uv=use_custom_skin)
         glEnd()
         glPopMatrix()
 
-    # 5. Profundores Horizontais Móveis (Differential Tailerons)
+    # 5. Profundores Horizontais Móveis (Differential Tailerons - sem cisalhamento trapezoidal)
     glColor3f(0.92, 0.93, 0.95) if use_custom_skin else glColor3f(0.58, 0.61, 0.66)
     for side in (-1.0, 1.0):
         glPushMatrix()
@@ -901,13 +1016,13 @@ def draw_f14_complete(
         span = side * 1.75
         glBegin(GL_QUADS)
         if side > 0:
-            draw_quad_with_normal([0.0, 0.03, -0.60], [0.0, 0.02, 0.78], [span, 0.01, 1.25], [span, 0.01, 0.38], 1.0)
-            draw_quad_with_normal([0.0, -0.02, 0.78], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, -0.01, 1.25], 1.0)
-            draw_quad_with_normal([0.0, -0.03, -0.60], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, -0.01, 0.38], 1.0)
+            draw_surface_quad([0.0, 0.03, -0.60], [0.0, 0.02, 0.78], [span, 0.01, 1.25], [span, 0.01, 0.38], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, -0.02, 0.78], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, -0.01, 1.25], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, -0.03, -0.60], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, -0.01, 0.38], 1.0, planar_uv=use_custom_skin)
         else:
-            draw_quad_with_normal([0.0, 0.02, 0.78], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, 0.01, 1.25], 1.0)
-            draw_quad_with_normal([0.0, -0.03, -0.60], [0.0, -0.02, 0.78], [span, -0.01, 1.25], [span, -0.01, 0.38], 1.0)
-            draw_quad_with_normal([0.0, 0.03, -0.60], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, 0.01, 0.38], 1.0)
+            draw_surface_quad([0.0, 0.02, 0.78], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, 0.01, 1.25], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, -0.03, -0.60], [0.0, -0.02, 0.78], [span, -0.01, 1.25], [span, -0.01, 0.38], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, 0.03, -0.60], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, 0.01, 0.38], 1.0, planar_uv=use_custom_skin)
         glEnd()
         glPopMatrix()
 

@@ -2,14 +2,12 @@
 ================================================================================
 TopGraphics | scene_inspection.py
 Cenário 3: Hangar / Domo de Inspeção Técnica, Aerodinâmica e Customização de Skins.
-  - F-14 suspenso em voo estacionário em (0, 15, 0) com Câmera 3 (Orbital 360°).
-  - Grade tática polar de referência espacial e iluminação em 3 pontos (Key/Fill/Rim)
-    para destacar tanto pinturas foscas quanto reflexos metálicos.
-  - Painel 2D interativo de diagnóstico das superfícies móveis e amostras da paleta.
+  - F-14 suspenso em voo estacionário em (0, 15, 0) com Câmera 3 (Orbital 360°) travada.
+  - Grade tática polar de referência espacial e iluminação de estúdio para destacar
+    tanto pinturas foscas quanto reflexos metálicos.
+  - Painel 2D exclusivo da Cena 3 (ocultável com 'H') para customização de skins [K/P].
 ================================================================================
 """
-
-# TODO: implement skin customization only on scene 3
 
 import math
 from OpenGL.GL import *
@@ -121,11 +119,14 @@ def build_scene3_inspection_list():
     return dlist
 
 
-def draw_inspection_overlay(width, height, aircraft, skin_manager):
+def draw_inspection_overlay(width, height, aircraft, skin_manager, scene_mode=3):
     """
-    Desenha o painel superior esquerdo de Customização de Skins e Inspeção de Controles
-    quando o usuário está na Cena 3 (ou exibe o indicador compacto de Skin nas Cenas 1 e 2).
+    Desenha o painel superior esquerdo de Customização de Skins EXCLUSIVAMENTE
+    quando o usuário está na Cena 3 (Modo de Inspeção).
     """
+    if scene_mode != 3 or skin_manager is None:
+        return
+
     pat_name, pal_name, swatches = skin_manager.get_hud_summary()
 
     glMatrixMode(GL_PROJECTION)
@@ -146,9 +147,9 @@ def draw_inspection_overlay(width, height, aircraft, skin_manager):
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glEnable(GL_LINE_SMOOTH)
 
-    # Painel de Customização de Skin no canto superior esquerdo
+    # Painel de Customização de Skin no canto superior esquerdo (exclusivo da Cena 3)
     px0, py1 = 22.0, height - 18.0
-    px1, py0 = 358.0, height - 134.0
+    px1, py0 = 368.0, height - 134.0
     _draw_hud_panel_box(px0, py0, px1, py1, cut=6.0)
 
     glLineWidth(1.6)
@@ -165,7 +166,7 @@ def draw_inspection_overlay(width, height, aircraft, skin_manager):
         glColor4f(0.55, 0.95, 0.70, 0.90)
         draw_vector_text("CANAIS SUBSTITUIDOS:", px0 + 12.0, py0 + 14.0, scale=7.5, align="left")
         for idx, rgb in enumerate(swatches):
-            bx = px0 + 178.0 + idx * 40.0
+            bx = px0 + 178.0 + idx * 42.0
             by = py0 + 10.0
             glColor4f(rgb[0] / 255.0, rgb[1] / 255.0, rgb[2] / 255.0, 0.95)
             glBegin(GL_QUADS)
