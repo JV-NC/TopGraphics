@@ -5,14 +5,13 @@ Trabalho Final: TOP GRAPHICS - Simulador de Voo 3D (F-14 Tomcat)
 ================================================================================
 Execução (a partir da raiz do repositório):
     pip install -r requirements.txt
-    python src/main.py [1|2]
+    python src/main.py [1|2|3]
 ================================================================================
 """
 
-# TODO: controller integration
+# TODO: gamepad integration
 # TODO: implement sound effects (engine sounds, ocean ambient sounds, and a soundtrack that can be muted)
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)
-# TODO: implement Scenario 3 (just the aircraft in camera 3 for model analisys and reaction of the controls)
 
 import sys
 import time
@@ -29,10 +28,19 @@ except ImportError as e:
 from flight_kinematics import Aircraft
 from camera import CameraController
 from f14_model import (
-    create_wing_insignia_texture, build_f14_static_fuselage_list, draw_f14_complete
+    create_wing_insignia_texture,
+    build_f14_static_fuselage_list,
+    build_f14_skinned_fuselage_list,
+    draw_f14_complete,
 )
+from skin_manager import SkinManager
 from scene_carrier import create_ocean_texture, create_deck_texture, build_scene1_carrier_list
 from scene_canyon import create_canyon_texture, build_scene2_canyon_list
+from scene_inspection import (
+    apply_inspection_lighting,
+    build_scene3_inspection_list,
+    draw_inspection_overlay,
+)
 from scene_utils import (
     create_cloud_vapor_texture,
     build_procedural_clouds_list,
@@ -52,8 +60,14 @@ from hud import draw_flight_hud, draw_crash_overlay
 # ==============================================================================
 
 class TopGraphicsApp:
+    SCENE_NAMES = {
+        1: "Cena 1: Oceano + Porta-Aviões (CVN-65)",
+        2: "Cena 2: Cânion Procedural (Trench Run)",
+        3: "Cena 3: Hangar de Inspeção Técnica e Customização de Skins",
+    }
+
     def __init__(self, initial_scene=1):
-        self.scene_mode = initial_scene  # 1 = Oceano + Porta-Aviões, 2 = Cânion Procedural
+        self.scene_mode = initial_scene  # 1 = Porta-Aviões, 2 = Cânion, 3 = Inspeção
 
         # Estados de recursos gráficos e interface
         self.lighting_enabled = True
@@ -67,37 +81,75 @@ class TopGraphicsApp:
 
         # Câmeras virtuais: Chase, Cockpit e Orbital
         self.camera = CameraController(self.player)
+        if self.scene_mode == 3:
+            self.camera.set_mode(3, scene_mode=3)
+
+        self.skin_manager = None
+
+    def switch_scene(self, target_scene):
+        """
+        Alterna diretamente para o cenário desejado (F1=1, F2=2, F3=3).
+        """
+        if target_scene == self.scene_mode:
+            print(f"[Cenário] Você já está na {self.SCENE_NAMES[self.scene_mode]} (sem reiniciar).")
+            return
+
+        self.scene_mode = target_scene
+        self.player.reset(self.scene_mode)
+
+        if self.scene_mode == 3:
+            self.camera.set_mode(3, scene_mode=3)
+        else:
+            self.camera.set_mode(1, scene_mode=self.scene_mode)
+            self.camera.snap_chase_to(self.player)
+
+        print(f"[Cenário] Alternado para {self.SCENE_NAMES[self.scene_mode]}")
 
     def key_callback(self, window, key, scancode, action, mods):
-        """Trata atalhos discretos de teclado para câmeras, trem de pouso, afterburner, HUD, cenas e inspeção."""
+        """Trata atalhos discretos de teclado para câmeras, trem, AB, skins, HUD e cenas."""
         if action != glfw.PRESS:
             return
 
         if key == glfw.KEY_ESCAPE:
             glfw.set_window_should_close(window, True)
         elif key == glfw.KEY_1:
-            self.camera.set_mode(1)
+            self.camera.set_mode(1, scene_mode=self.scene_mode)
         elif key == glfw.KEY_2:
-            self.camera.set_mode(2)
+            self.camera.set_mode(2, scene_mode=self.scene_mode)
         elif key == glfw.KEY_3:
-            self.camera.set_mode(3)
+            self.camera.set_mode(3, scene_mode=self.scene_mode)
+        elif key == glfw.KEY_F1:
+            self.switch_scene(1)
+        elif key == glfw.KEY_F2:
+            self.switch_scene(2)
+        elif key == glfw.KEY_F3:
+            self.switch_scene(3)
         elif key == glfw.KEY_Q:
             self.player.toggle_gear()
         elif key == glfw.KEY_E:
             self.player.toggle_afterburner()
+        elif key == glfw.KEY_K:
+            if self.scene_mode == 3:
+                if self.skin_manager is not None:
+                    self.skin_manager.next_pattern(scene_mode=self.scene_mode)
+            else:
+                print("[Skins] Customização de skin bloqueada em voo! Pressione [F3] para ir à Cena de Inspeção.")
+        elif key == glfw.KEY_P:
+            if self.scene_mode == 3:
+                if self.skin_manager is not None:
+                    self.skin_manager.next_palette(scene_mode=self.scene_mode)
+            else:
+                print("[Skins] Customização de paleta bloqueada em voo! Pressione [F3] para ir à Cena de Inspeção.")
         elif key == glfw.KEY_H:
             self.hud_enabled = not self.hud_enabled
             print(f"[HUD] Interface Tática: {'ATIVADA' if self.hud_enabled else 'OCULTA'}")
-        elif key == glfw.KEY_M:
-            self.scene_mode = 2 if self.scene_mode == 1 else 1
-            self.player.reset(self.scene_mode)
-            self.camera.snap_chase_to(self.player)
-            nome = "Cena 1: Oceano + Porta-Aviões" if self.scene_mode == 1 else "Cena 2: Cânion Procedural"
-            print(f"[Cenário] Alternado para {nome}")
         elif key == glfw.KEY_R:
             self.player.reset(self.scene_mode)
-            self.camera.snap_chase_to(self.player)
-            print("[Voo] Posição do F-14 reiniciada.")
+            if self.scene_mode == 3:
+                self.camera.set_mode(3, scene_mode=3)
+            else:
+                self.camera.snap_chase_to(self.player)
+            print("[Voo] Posição e atitude do F-14 reiniciadas.")
         elif key == glfw.KEY_L:
             self.lighting_enabled = not self.lighting_enabled
             print(f"Iluminação Artificial: {'ATIVADA' if self.lighting_enabled else 'DESATIVADA'}")
@@ -158,32 +210,38 @@ class TopGraphicsApp:
         wing_tex = create_wing_insignia_texture()
         cloud_vapor_tex = create_cloud_vapor_texture()
 
+        self.skin_manager = SkinManager(default_wing_tex_id=wing_tex)
+
         player_fuselage_list = build_f14_static_fuselage_list(wing_tex)
+        player_skinned_fuselage_list = build_f14_skinned_fuselage_list()
+
         scene1_list = build_scene1_carrier_list(ocean_tex, deck_tex)
         scene2_list = build_scene2_canyon_list(canyon_tex)
+        scene3_list = build_scene3_inspection_list()
         clouds1_list = build_procedural_clouds_list(scene_mode=1)
         clouds2_list = build_procedural_clouds_list(scene_mode=2)
 
         last_time = time.time()
         start_time = last_time
 
-        print("\n" + "=" * 76)
-        print(" CONTROLES DE VOO E DEMONSTRAÇÃO (TOP GRAPHICS - F-14 TOMCAT)")
-        print("=" * 76)
+        print("\n" + "=" * 78)
+        print(" CONTROLES DE VOO, INSPEÇÃO E SKINS (TOP GRAPHICS - F-14 TOMCAT)")
+        print("=" * 78)
+        print(" [F1 / F2 / F3]        : Selecionar Cenário (F1: Navio | F2: Cânion | F3: Inspeção)")
         print(" [W / S]               : Potência (Throttle) / Segure 'S' no convés para Frear")
         print(" [E]                   : Ligar / Desligar Pós-Combustor (Afterburner Boost)")
         print(" [Q]                   : Recolher / Baixar Trem de Pouso Retrátil (Gera Arrasto)")
         print(" [Setas Baixo / Cima]  : Puxar Manche (Subir/Decolar) / Empurrar (Mergulhar)")
-        print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas em voo)")
+        print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas e acionar Spoilers)")
         print(" [A / D]               : Guinada (Leme em voo / Direção da roda no convés)")
         print(" [G]                   : Alternar Enflecamento das Asas (Auto <-> Manual)")
-        print(" [H]                   : Mostrar / Ocultar HUD Tático na Tela")
-        print(" [1 / 2 / 3]           : Câmeras (1: Chase, 2: Cockpit/HUD, 3: Orbital Mouse)")
-        print(" [M]                   : Alternar Cenário (Porta-Aviões <-> Cânion)")
+        print(" [K / P] (Apenas F3)   : Trocar Padrão de Skin (K) e Paleta de Camuflagem (P)")
+        print(" [H]                   : Mostrar / Ocultar HUD Tático (e HUD de Skins na Cena 3)")
+        print(" [1 / 2 / 3]           : Câmeras (Travada no Modo 3 Orbital durante a Cena 3)")
         print(" [L / T / Z]           : Ligar/Desligar Luzes (L), Texturas (T), Wireframe (Z)")
-        print(" [R]                   : Reiniciar Posição do Caça imediatamente")
+        print(" [R]                   : Reiniciar Posição/Atitude do Caça imediatamente")
         print(" [ESC]                 : Sair")
-        print("=" * 76 + "\n")
+        print("=" * 78 + "\n")
 
         while not glfw.window_should_close(window):
             now = time.time()
@@ -219,16 +277,17 @@ class TopGraphicsApp:
 
             # Atualiza cinemática, afterburner, trem de pouso, teleporte Roundabout e colisões
             self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
-            # Sincroniza a Chase Cam caso o caça tenha cruzado a borda do mapa neste frame
             self.camera.apply_wrap_delta(self.player.last_wrap_delta)
 
             width, height = glfw.get_framebuffer_size(window)
             height = max(1, height)
             glViewport(0, 0, width, height)
 
-            # Calcula o estado atual do nascer do sol e aplica cor de fundo
-            sun_state = get_sun_state(sim_time, self.scene_mode)
-            apply_sunrise_lighting(sun_state, self.lighting_enabled)
+            if self.scene_mode == 3:
+                apply_inspection_lighting(self.lighting_enabled)
+            else:
+                sun_state = get_sun_state(sim_time, self.scene_mode)
+                apply_sunrise_lighting(sun_state, self.lighting_enabled)
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
@@ -239,14 +298,18 @@ class TopGraphicsApp:
             glMatrixMode(GL_MODELVIEW)
             glLoadIdentity()
 
-            self.camera.apply(self.player, dt)
+            self.camera.apply(self.player, dt, scene_mode=self.scene_mode)
 
-            # 1. Domo de Horizonte Crepuscular + Disco Solar e Halos
-            draw_rising_sun_and_sky(self.player.pos, sun_state, self.scene_mode)
+            # 1. Cenas 1 e 2 usam Sky Dome de Nascer do Sol; Cena 3 usa Plataforma de Inspeção
+            if self.scene_mode in (1, 2):
+                draw_rising_sun_and_sky(self.player.pos, sun_state, self.scene_mode)
 
-            # Reaplica a posição da luz direcional do Sol (GL_LIGHT0) no espaço de mundo atual
             if self.lighting_enabled:
-                apply_sunrise_lighting(sun_state, True)
+                if self.scene_mode == 3:
+                    apply_inspection_lighting(True)
+                else:
+                    apply_sunrise_lighting(sun_state, True)
+
                 if self.player.afterburner and self.player.throttle > 0.02 and not self.player.crashed:
                     glEnable(GL_LIGHT1)
                     afterburner_pos = self.player.pos - self.player.forward * 5.5
@@ -264,30 +327,40 @@ class TopGraphicsApp:
             else:
                 glDisable(GL_TEXTURE_2D)
 
-            # 2. Geometria Opaca do Cenário com Instanciação Periódica ("Roundabout")
+            # 2. Geometria do Cenário Ativo (1, 2 ou 3)
             if self.scene_mode == 1:
                 draw_periodic_scene(scene1_list, self.player.pos, scene_mode=1)
                 draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
-            else:
+            elif self.scene_mode == 2:
                 draw_periodic_scene(scene2_list, self.player.pos, scene_mode=2)
+            else:
+                glCallList(scene3_list)
 
             if self.textures_enabled:
                 glEnable(GL_TEXTURE_2D)
             else:
                 glDisable(GL_TEXTURE_2D)
 
-            # 3. F-14 Tomcat (Geometria Opaca + Afterburners)
+            # 3. F-14 Tomcat (com suporte à Skin ativa: Padrão, Metálica ou Camuflagem)
             if self.camera.mode != 2:
-                draw_f14_complete(self.player, player_fuselage_list, wing_tex, sim_time)
+                draw_f14_complete(
+                    self.player,
+                    player_fuselage_list,
+                    wing_tex,
+                    sim_time,
+                    skin_manager=self.skin_manager,
+                    skinned_fuselage_dlist=player_skinned_fuselage_list,
+                )
 
-            # 4. Nuvens Procedurais de Vapor Semitransparente (periódicas no Roundabout)
-            active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
-            draw_procedural_clouds(
-                active_clouds, cloud_vapor_tex, sim_time,
-                player_pos=self.player.pos, scene_mode=self.scene_mode
-            )
+            # 4. Nuvens Procedurais de Vapor (apenas nos cenários externos 1 e 2)
+            if self.scene_mode in (1, 2):
+                active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
+                draw_procedural_clouds(
+                    active_clouds, cloud_vapor_tex, sim_time,
+                    player_pos=self.player.pos, scene_mode=self.scene_mode
+                )
 
-            # 5. HUD Integrado de Aviónica e Telemetria (visível em todas as câmeras, alternável com 'H')
+            # 5. HUD Integrado + Painel de Customização de Skins (visível apenas na Cena 3 e alternável com 'H')
             if self.hud_enabled:
                 draw_flight_hud(
                     width, height, self.player,
@@ -295,8 +368,12 @@ class TopGraphicsApp:
                     scene_mode=self.scene_mode,
                     sim_time=sim_time
                 )
+                if self.scene_mode == 3:
+                    draw_inspection_overlay(
+                        width, height, self.player, self.skin_manager, scene_mode=self.scene_mode
+                    )
 
-            # 6. Alerta de Impacto (Game Over) com tipografia vetorial na tela
+            # 6. Alerta de Impacto (Game Over)
             if self.player.crashed:
                 draw_crash_overlay(width, height, self.player.crash_reason)
 
@@ -307,20 +384,21 @@ class TopGraphicsApp:
 
 def select_initial_scene():
     """Menu rápido no terminal ao iniciar a aplicação (ou via argumento de linha de comando)."""
-    if len(sys.argv) > 1 and sys.argv[1] in ("1", "2"):
+    if len(sys.argv) > 1 and sys.argv[1] in ("1", "2", "3"):
         return int(sys.argv[1])
 
-    print("=" * 68)
+    print("=" * 72)
     print("   TOP GRAPHICS - SIMULADOR DE VOO F-14 TOMCAT (CEFET-MG)")
-    print("=" * 68)
-    print(" Escolha o cenário inicial (você também pode alternar com 'M' em voo):")
+    print("=" * 72)
+    print(" Escolha o cenário inicial (você também pode alternar com F1/F2/F3):")
     print("   [1] Cena 1: Oceano + Porta-Aviões (Inicia parado no convés para decolar)")
     print("   [2] Cena 2: Cânion Procedural ('Trench Run' - Inicia em voo)")
-    print("=" * 68)
+    print("   [3] Cena 3: Hangar de Inspeção 360° e Customização de Skins")
+    print("=" * 72)
     try:
-        choice = input(" Digite 1 ou 2 [Padrão = 1]: ").strip()
-        if choice == "2":
-            return 2
+        choice = input(" Digite 1, 2 ou 3 [Padrão = 1]: ").strip()
+        if choice in ("2", "3"):
+            return int(choice)
     except EOFError:
         pass
     return 1

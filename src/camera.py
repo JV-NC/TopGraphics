@@ -4,7 +4,8 @@ TopGraphics | camera.py
 Sistema de câmeras virtuais: 1) Chase Cam, 2) Cockpit Cam, 3) Orbital Livre (mouse).
 Independente de GLFW: o main.py repassa os eventos de mouse para os métodos on_*.
 Inclui suporte ao teleporte toroidal (apply_wrap_delta) para manter a Chase Cam
-perfeitamente sincronizada quando a aeronave cruza a borda do mapa ("Roundabout").
+perfeitamente sincronizada quando a aeronave cruza a borda do mapa ("Roundabout")
+e trava automática no Modo 3 (Orbital 360°) durante a Cena 3 de Inspeção.
 ================================================================================
 """
 
@@ -44,8 +45,15 @@ class CameraController:
         self.chase_cam_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         self.snap_chase_to(aircraft)
 
-    def set_mode(self, mode):
-        """Troca o modo de câmera (1, 2 ou 3) e informa no terminal."""
+    def set_mode(self, mode, scene_mode=1):
+        """
+        Troca o modo de câmera (1, 2 ou 3) e informa no terminal.
+        Caso esteja na Cena 3 (Inspeção), trava obrigatoriamente na Câmera 3 (Orbital).
+        """
+        if scene_mode == 3 and mode != 3:
+            self.mode = 3
+            print("[Câmera] Travada no Modo 3 (Orbital 360°) durante a Cena 3 de Inspeção!")
+            return
         self.mode = mode
         print(self.MODE_MESSAGES[mode])
 
@@ -83,8 +91,11 @@ class CameraController:
         if self.mode == 3:
             self.orbit_distance = np.clip(self.orbit_distance - yoffset * 2.0, 8.0, 80.0)
 
-    def apply(self, aircraft, dt):
-        """Aplica gluLookAt conforme o modo de câmera ativo."""
+    def apply(self, aircraft, dt, scene_mode=1):
+        """Aplica gluLookAt conforme o modo de câmera ativo (forçando Modo 3 na Cena 3)."""
+        if scene_mode == 3:
+            self.mode = 3
+
         p = aircraft.pos
         f = aircraft.forward
         u = aircraft.up
