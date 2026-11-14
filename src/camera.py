@@ -8,6 +8,8 @@ perfeitamente sincronizada quando a aeronave cruza a borda do mapa ("Roundabout"
 ================================================================================
 """
 
+#TODO: lock on camera 3 if in scene 3 (inspection scene)
+
 import math
 
 import numpy as np

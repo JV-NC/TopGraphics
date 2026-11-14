@@ -14,6 +14,8 @@ Renderizado 100% via código em projeção ortográfica 2D (OpenGL), incluindo:
 ================================================================================
 """
 
+# TODO: implement show customization hud only on inspection mode (scene 3) and hides normally if presses hide/show hud button
+
 import math
 import numpy as np
 from OpenGL.GL import *

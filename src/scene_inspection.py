@@ -9,6 +9,8 @@ Cenário 3: Hangar / Domo de Inspeção Técnica, Aerodinâmica e Customização
 ================================================================================
 """
 
+# TODO: implement skin customization only on scene 3
+
 import math
 from OpenGL.GL import *
 from OpenGL.GLU import *

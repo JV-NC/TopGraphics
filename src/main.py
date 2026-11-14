@@ -9,6 +9,7 @@ Execução (a partir da raiz do repositório):
 ================================================================================
 """
 
+# TODO: change map selection to f1, f2 and f3 instead of cicle on M key
 # TODO: controller integration
 # TODO: implement sound effects (engine sounds, ocean ambient sounds, and a soundtrack that can be muted)
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)

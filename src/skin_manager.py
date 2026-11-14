@@ -11,6 +11,8 @@ Gerenciador de Skins do F-14 Tomcat:
 ================================================================================
 """
 
+# TODO: fix metallic and camo pattern distortions
+
 import os
 import math
 import numpy as np
