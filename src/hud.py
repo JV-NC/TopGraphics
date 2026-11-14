@@ -276,7 +276,12 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     gps_y0 = gps_y1 - 46.0
     _draw_hud_panel_box(gps_x0, gps_y0, gps_x1, gps_y1, cut=5.0)
 
-    sector_name = "SECTOR 01: CVN-65 PACIFIC" if scene_mode == 1 else "SECTOR 02: TRENCH CANYON"
+    if scene_mode == 1:
+        sector_name = "SECTOR 01: CVN-65 PACIFIC"
+    elif scene_mode == 2:
+        sector_name = "SECTOR 02: TRENCH CANYON"
+    else:
+        sector_name = "SECTOR 03: F-14 INSPECTION"
     glColor4f(0.25, 1.0, 0.48, 0.95)
     draw_vector_text(sector_name, gps_x0 + 10.0, gps_y1 - 17.0, scale=8.2, align="left")
     glColor4f(0.65, 1.0, 0.78, 0.90)
@@ -550,7 +555,7 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
 # 3. PAINÉIS INFERIORES DE TELEMETRIA E SISTEMAS (STATUS, THROTTLE, AB, TREM, ASAS)
 # ==============================================================================
 
-def _draw_bottom_telemetry_panels(width, height, aircraft, sim_time):
+def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time):
     """
     Renderiza os dois painéis inferiores da aeronave:
       - Inferior Esquerdo: Estado da Aeronave (NO CONVÉS / EM VOO / STALL),
@@ -566,8 +571,11 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, sim_time):
     _draw_hud_panel_box(lx0, ly0, lx1, ly1, cut=6.0)
 
     # 1. Estado da Aeronave (NO CONVES vs EM VOO vs ALERTA DE STALL)
-    is_stalling = (not aircraft.on_ground) and (aircraft.speed < aircraft.min_flight_speed * 1.05)
-    if aircraft.on_ground:
+    is_stalling = (scene_mode != 3) and (not aircraft.on_ground) and (aircraft.speed < aircraft.min_flight_speed * 1.05)
+    if scene_mode == 3:
+        status_txt = "STATUS: MODO INSPECAO"
+        status_col = (0.35, 0.95, 1.0, 1.0)
+    elif aircraft.on_ground:
         status_txt = "STATUS: NO CONVES"
         status_col = (0.30, 0.95, 1.0, 1.0)
     elif is_stalling:
@@ -746,7 +754,7 @@ def draw_flight_hud(width, height, aircraft, camera_mode=1, scene_mode=1, sim_ti
     _draw_speed_and_altitude_tapes(width, height, aircraft)
 
     # 4. Painéis inferiores de Estado, Potência, Afterburner, Trem de Pouso e Asas
-    _draw_bottom_telemetry_panels(width, height, aircraft, sim_time)
+    _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
 
     glPopAttrib()
     glPopMatrix()

@@ -96,7 +96,7 @@ class Aircraft:
         self.rudder_yaw = 0.0
 
     def reset(self, scene_mode):
-        """Reposiciona a aeronave no estado inicial do cenário selecionado."""
+        """Reposiciona a aeronave no estado inicial do cenário selecionado (1, 2 ou 3)."""
         self.crashed = False
         self.crash_reason = ""
         self.crash_timer = 0.0
@@ -116,7 +116,7 @@ class Aircraft:
             self.gear_down = True
             self.gear_deploy = 1.0
             self.wing_sweep_angle = 20.0
-        else:
+        elif scene_mode == 2:
             # Cena 2: Começa em voo na entrada do Cânion com trem de pouso recolhido
             self.pos = np.array([0.0, 38.0, 360.0], dtype=np.float32)
             self.speed = 65.0
@@ -125,6 +125,15 @@ class Aircraft:
             self.gear_down = False
             self.gear_deploy = 0.0
             self.wing_sweep_angle = 40.0
+        else:
+            # Cena 3: Modo de Inspeção Técnica e Customização de Skins (suspenso e estacionário)
+            self.pos = np.array([0.0, 15.0, 0.0], dtype=np.float32)
+            self.speed = 35.0
+            self.throttle = 0.25
+            self.on_ground = False
+            self.gear_down = True
+            self.gear_deploy = 1.0
+            self.wing_sweep_angle = 20.0
 
         self.max_speed = self.get_effective_max_speed()
 
@@ -334,7 +343,26 @@ class Aircraft:
                 self.on_ground = False
                 if self.speed < self.min_flight_speed:
                     print("[Alerta] Saiu do convés sem velocidade de sustentação!")
+        # ======================================================================
+        # MODO INSPEÇÃO (CENA 3: Suspenso sem translação e sem colisão)
+        # ======================================================================
+        elif scene_mode == 3:
+            target_speed = self.throttle * self.max_speed
+            self.speed += (target_speed - self.speed) * min(1.0, accel_rate * dt)
 
+            pitch_rate = 1.45
+            roll_rate = 2.60
+            yaw_rate = 1.10
+
+            if abs(pitch_input) > 1e-4:
+                self.pitch(pitch_input * pitch_rate * dt)
+            if abs(roll_input) > 1e-4:
+                self.roll(roll_input * roll_rate * dt)
+            if abs(yaw_input) > 1e-4:
+                self.yaw(yaw_input * yaw_rate * dt)
+
+            # Mantém posição fixa no centro do domo de inspeção
+            self.pos[:] = [0.0, 15.0, 0.0]
         # ======================================================================
         # MODO EM VOO (6-DOF Livre sem Gimbal Lock + Mundo Infinito Roundabout)
         # ======================================================================
