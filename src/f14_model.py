@@ -8,6 +8,8 @@ com Mapeamento UV Triplanar Métrico (livre de distorções de aspecto ou cisalh
 ================================================================================
 """
 
+# TODO: refactor movable parts of the aircraft (spoiler wings, flaps, tailerons, rudders, elevators)
+
 import math
 import numpy as np
 from OpenGL.GL import *
