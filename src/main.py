@@ -10,7 +10,6 @@ Execução (a partir da raiz do repositório):
 """
 
 # TODO: gamepad integration
-# TODO: implement sound effects (engine sounds, ocean ambient sounds, and a soundtrack that can be muted)
 # TODO: create a project menu (title, scene selector, and control mapping on the same screen)
 
 import sys
@@ -34,6 +33,7 @@ from f14_model import (
     draw_f14_complete,
 )
 from skin_manager import SkinManager
+from audio_manager import AudioManager
 from scene_carrier import create_ocean_texture, create_deck_texture, build_scene1_carrier_list
 from scene_canyon import create_canyon_texture, build_scene2_canyon_list
 from scene_inspection import (
@@ -56,7 +56,7 @@ from hud import draw_flight_hud, draw_crash_overlay
 
 
 # ==============================================================================
-# APLICAÇÃO PRINCIPAL E LOOP DE RENDERIZAÇÃO (GLFW + OPENGL)
+# APLICAÇÃO PRINCIPAL E LOOP DE RENDERIZAÇÃO (GLFW + OPENGL + AUDIOMANAGER)
 # ==============================================================================
 
 class TopGraphicsApp:
@@ -79,16 +79,23 @@ class TopGraphicsApp:
         self.player = Aircraft()
         self.player.reset(self.scene_mode)
 
-        # Câmeras virtuais: Chase, Cockpit e Orbital
+        # Câmeras virtuais: Chase, Cockpit e Orbital (travada em 3 se iniciar na Cena 3)
         self.camera = CameraController(self.player)
         if self.scene_mode == 3:
             self.camera.set_mode(3, scene_mode=3)
 
         self.skin_manager = None
 
+        # Sistema de Áudio independente (sounddevice + soundfile + NumPy)
+        self.audio = AudioManager(
+            initial_scene=self.scene_mode,
+            initial_camera_mode=self.camera.mode
+        )
+
     def switch_scene(self, target_scene):
         """
         Alterna diretamente para o cenário desejado (F1=1, F2=2, F3=3).
+        Não reinicia o mapa nem a aeronave caso o jogador já esteja no cenário solicitado.
         """
         if target_scene == self.scene_mode:
             print(f"[Cenário] Você já está na {self.SCENE_NAMES[self.scene_mode]} (sem reiniciar).")
@@ -103,10 +110,12 @@ class TopGraphicsApp:
             self.camera.set_mode(1, scene_mode=self.scene_mode)
             self.camera.snap_chase_to(self.player)
 
+        self.audio.set_camera_mode(self.camera.mode)
+        self.audio.set_scene(self.scene_mode)
         print(f"[Cenário] Alternado para {self.SCENE_NAMES[self.scene_mode]}")
 
     def key_callback(self, window, key, scancode, action, mods):
-        """Trata atalhos discretos de teclado para câmeras, trem, AB, skins, HUD e cenas."""
+        """Trata atalhos discretos de teclado para câmeras, trem, AB, skins, áudio, HUD e cenas."""
         if action != glfw.PRESS:
             return
 
@@ -114,10 +123,13 @@ class TopGraphicsApp:
             glfw.set_window_should_close(window, True)
         elif key == glfw.KEY_1:
             self.camera.set_mode(1, scene_mode=self.scene_mode)
+            self.audio.set_camera_mode(self.camera.mode)
         elif key == glfw.KEY_2:
             self.camera.set_mode(2, scene_mode=self.scene_mode)
+            self.audio.set_camera_mode(self.camera.mode)
         elif key == glfw.KEY_3:
             self.camera.set_mode(3, scene_mode=self.scene_mode)
+            self.audio.set_camera_mode(self.camera.mode)
         elif key == glfw.KEY_F1:
             self.switch_scene(1)
         elif key == glfw.KEY_F2:
@@ -125,9 +137,16 @@ class TopGraphicsApp:
         elif key == glfw.KEY_F3:
             self.switch_scene(3)
         elif key == glfw.KEY_Q:
+            prev_gear = self.player.gear_down
             self.player.toggle_gear()
+            if self.player.gear_down != prev_gear:
+                self.audio.play_gear_sfx(deploying=self.player.gear_down)
         elif key == glfw.KEY_E:
             self.player.toggle_afterburner()
+        elif key == glfw.KEY_M:
+            self.audio.toggle_mute()
+        elif key == glfw.KEY_N:
+            self.audio.toggle_music_mute()
         elif key == glfw.KEY_K:
             if self.scene_mode == 3:
                 if self.skin_manager is not None:
@@ -149,6 +168,7 @@ class TopGraphicsApp:
                 self.camera.set_mode(3, scene_mode=3)
             else:
                 self.camera.snap_chase_to(self.player)
+            self.audio.set_camera_mode(self.camera.mode)
             print("[Voo] Posição e atitude do F-14 reiniciadas.")
         elif key == glfw.KEY_L:
             self.lighting_enabled = not self.lighting_enabled
@@ -221,165 +241,181 @@ class TopGraphicsApp:
         clouds1_list = build_procedural_clouds_list(scene_mode=1)
         clouds2_list = build_procedural_clouds_list(scene_mode=2)
 
+        # Inicia o stream de áudio contínuo
+        self.audio.start()
+
         last_time = time.time()
         start_time = last_time
 
         print("\n" + "=" * 78)
-        print(" CONTROLES DE VOO, INSPEÇÃO E SKINS (TOP GRAPHICS - F-14 TOMCAT)")
+        print(" CONTROLES DE VOO, INSPEÇÃO, SKINS E ÁUDIO (TOP GRAPHICS - F-14 TOMCAT)")
         print("=" * 78)
         print(" [F1 / F2 / F3]        : Selecionar Cenário (F1: Navio | F2: Cânion | F3: Inspeção)")
         print(" [W / S]               : Potência (Throttle) / Segure 'S' no convés para Frear")
-        print(" [E]                   : Ligar / Desligar Pós-Combustor (Afterburner Boost)")
-        print(" [Q]                   : Recolher / Baixar Trem de Pouso Retrátil (Gera Arrasto)")
+        print(" [E]                   : Ligar / Desligar Pós-Combustor (Afterburner EFSC)")
+        print(" [Q]                   : Recolher / Baixar Trem de Pouso Retrátil (SFX + Arrasto)")
         print(" [Setas Baixo / Cima]  : Puxar Manche (Subir/Decolar) / Empurrar (Mergulhar)")
         print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas e acionar Spoilers)")
         print(" [A / D]               : Guinada (Leme em voo / Direção da roda no convés)")
         print(" [G]                   : Alternar Enflecamento das Asas (Auto <-> Manual)")
         print(" [K / P] (Apenas F3)   : Trocar Padrão de Skin (K) e Paleta de Camuflagem (P)")
+        print(" [M / N]               : Mute Geral do Áudio (M) / Mute da Música (N)")
         print(" [H]                   : Mostrar / Ocultar HUD Tático (e HUD de Skins na Cena 3)")
-        print(" [1 / 2 / 3]           : Câmeras (Travada no Modo 3 Orbital durante a Cena 3)")
+        print(" [1 / 2 / 3]           : Câmeras (1/3: Áudio Externo | 2: Áudio Interno Cockpit)")
         print(" [L / T / Z]           : Ligar/Desligar Luzes (L), Texturas (T), Wireframe (Z)")
         print(" [R]                   : Reiniciar Posição/Atitude do Caça imediatamente")
         print(" [ESC]                 : Sair")
         print("=" * 78 + "\n")
 
-        while not glfw.window_should_close(window):
-            now = time.time()
-            dt = min(0.05, now - last_time)
-            last_time = now
-            sim_time = now - start_time
+        try:
+            while not glfw.window_should_close(window):
+                now = time.time()
+                dt = min(0.05, now - last_time)
+                last_time = now
+                sim_time = now - start_time
 
-            glfw.poll_events()
+                glfw.poll_events()
 
-            pitch_in = 0.0
-            roll_in = 0.0
-            yaw_in = 0.0
-            throttle_in = 0.0
-            brake_active = False
+                pitch_in = 0.0
+                roll_in = 0.0
+                yaw_in = 0.0
+                throttle_in = 0.0
+                brake_active = False
 
-            if glfw.get_key(window, glfw.KEY_UP) == glfw.PRESS:
-                pitch_in -= 1.0
-            if glfw.get_key(window, glfw.KEY_DOWN) == glfw.PRESS:
-                pitch_in += 1.0
-            if glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS:
-                roll_in -= 1.0
-            if glfw.get_key(window, glfw.KEY_RIGHT) == glfw.PRESS:
-                roll_in += 1.0
-            if glfw.get_key(window, glfw.KEY_A) == glfw.PRESS:
-                yaw_in += 1.0
-            if glfw.get_key(window, glfw.KEY_D) == glfw.PRESS:
-                yaw_in -= 1.0
-            if glfw.get_key(window, glfw.KEY_W) == glfw.PRESS:
-                throttle_in += 1.0
-            if glfw.get_key(window, glfw.KEY_S) == glfw.PRESS:
-                throttle_in -= 1.0
-                brake_active = True
+                if glfw.get_key(window, glfw.KEY_UP) == glfw.PRESS:
+                    pitch_in -= 1.0
+                if glfw.get_key(window, glfw.KEY_DOWN) == glfw.PRESS:
+                    pitch_in += 1.0
+                if glfw.get_key(window, glfw.KEY_LEFT) == glfw.PRESS:
+                    roll_in -= 1.0
+                if glfw.get_key(window, glfw.KEY_RIGHT) == glfw.PRESS:
+                    roll_in += 1.0
+                if glfw.get_key(window, glfw.KEY_A) == glfw.PRESS:
+                    yaw_in += 1.0
+                if glfw.get_key(window, glfw.KEY_D) == glfw.PRESS:
+                    yaw_in -= 1.0
+                if glfw.get_key(window, glfw.KEY_W) == glfw.PRESS:
+                    throttle_in += 1.0
+                if glfw.get_key(window, glfw.KEY_S) == glfw.PRESS:
+                    throttle_in -= 1.0
+                    brake_active = True
 
-            # Atualiza cinemática, afterburner, trem de pouso, teleporte Roundabout e colisões
-            self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
-            self.camera.apply_wrap_delta(self.player.last_wrap_delta)
+                # Atualiza cinemática, afterburner, trem de pouso, teleporte Roundabout e colisões
+                self.player.update(dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
+                self.camera.apply_wrap_delta(self.player.last_wrap_delta)
 
-            width, height = glfw.get_framebuffer_size(window)
-            height = max(1, height)
-            glViewport(0, 0, width, height)
+                # Sincroniza o estado atual da aeronave com o mixer de áudio em tempo real
+                self.audio.update(
+                    dt=dt,
+                    throttle=self.player.throttle,
+                    afterburner=self.player.afterburner,
+                    crashed=self.player.crashed,
+                    aircraft_speed=self.player.speed,
+                    on_ground=self.player.on_ground,
+                )
 
-            if self.scene_mode == 3:
-                apply_inspection_lighting(self.lighting_enabled)
-            else:
-                sun_state = get_sun_state(sim_time, self.scene_mode)
-                apply_sunrise_lighting(sun_state, self.lighting_enabled)
+                width, height = glfw.get_framebuffer_size(window)
+                height = max(1, height)
+                glViewport(0, 0, width, height)
 
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-            glMatrixMode(GL_PROJECTION)
-            glLoadIdentity()
-            gluPerspective(60.0, width / float(height), 0.5, 3500.0)
-
-            glMatrixMode(GL_MODELVIEW)
-            glLoadIdentity()
-
-            self.camera.apply(self.player, dt, scene_mode=self.scene_mode)
-
-            # 1. Cenas 1 e 2 usam Sky Dome de Nascer do Sol; Cena 3 usa Plataforma de Inspeção
-            if self.scene_mode in (1, 2):
-                draw_rising_sun_and_sky(self.player.pos, sun_state, self.scene_mode)
-
-            if self.lighting_enabled:
                 if self.scene_mode == 3:
-                    apply_inspection_lighting(True)
+                    apply_inspection_lighting(self.lighting_enabled)
                 else:
-                    apply_sunrise_lighting(sun_state, True)
+                    sun_state = get_sun_state(sim_time, self.scene_mode)
+                    apply_sunrise_lighting(sun_state, self.lighting_enabled)
 
-                if self.player.afterburner and self.player.throttle > 0.02 and not self.player.crashed:
-                    glEnable(GL_LIGHT1)
-                    afterburner_pos = self.player.pos - self.player.forward * 5.5
-                    glLightfv(
-                        GL_LIGHT1, GL_POSITION,
-                        [afterburner_pos[0], afterburner_pos[1], afterburner_pos[2], 1.0]
-                    )
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+                glMatrixMode(GL_PROJECTION)
+                glLoadIdentity()
+                gluPerspective(60.0, width / float(height), 0.5, 3500.0)
+
+                glMatrixMode(GL_MODELVIEW)
+                glLoadIdentity()
+
+                self.camera.apply(self.player, dt, scene_mode=self.scene_mode)
+
+                # 1. Cenas 1 e 2 usam Sky Dome de Nascer do Sol; Cena 3 usa Plataforma de Inspeção
+                if self.scene_mode in (1, 2):
+                    draw_rising_sun_and_sky(self.player.pos, sun_state, self.scene_mode)
+
+                if self.lighting_enabled:
+                    if self.scene_mode == 3:
+                        apply_inspection_lighting(True)
+                    else:
+                        apply_sunrise_lighting(sun_state, True)
+
+                    if self.player.afterburner and self.player.throttle > 0.02 and not self.player.crashed:
+                        glEnable(GL_LIGHT1)
+                        afterburner_pos = self.player.pos - self.player.forward * 5.5
+                        glLightfv(
+                            GL_LIGHT1, GL_POSITION,
+                            [afterburner_pos[0], afterburner_pos[1], afterburner_pos[2], 1.0]
+                        )
+                    else:
+                        glDisable(GL_LIGHT1)
                 else:
-                    glDisable(GL_LIGHT1)
-            else:
-                glDisable(GL_LIGHTING)
+                    glDisable(GL_LIGHTING)
 
-            if self.textures_enabled:
-                glEnable(GL_TEXTURE_2D)
-            else:
-                glDisable(GL_TEXTURE_2D)
+                if self.textures_enabled:
+                    glEnable(GL_TEXTURE_2D)
+                else:
+                    glDisable(GL_TEXTURE_2D)
 
-            # 2. Geometria do Cenário Ativo (1, 2 ou 3)
-            if self.scene_mode == 1:
-                draw_periodic_scene(scene1_list, self.player.pos, scene_mode=1)
-                draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
-            elif self.scene_mode == 2:
-                draw_periodic_scene(scene2_list, self.player.pos, scene_mode=2)
-            else:
-                glCallList(scene3_list)
+                # 2. Geometria do Cenário Ativo (1, 2 ou 3)
+                if self.scene_mode == 1:
+                    draw_periodic_scene(scene1_list, self.player.pos, scene_mode=1)
+                    draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
+                elif self.scene_mode == 2:
+                    draw_periodic_scene(scene2_list, self.player.pos, scene_mode=2)
+                else:
+                    glCallList(scene3_list)
 
-            if self.textures_enabled:
-                glEnable(GL_TEXTURE_2D)
-            else:
-                glDisable(GL_TEXTURE_2D)
+                if self.textures_enabled:
+                    glEnable(GL_TEXTURE_2D)
+                else:
+                    glDisable(GL_TEXTURE_2D)
 
-            # 3. F-14 Tomcat (com suporte à Skin ativa: Padrão, Metálica ou Camuflagem)
-            if self.camera.mode != 2:
-                draw_f14_complete(
-                    self.player,
-                    player_fuselage_list,
-                    wing_tex,
-                    sim_time,
-                    skin_manager=self.skin_manager,
-                    skinned_fuselage_dlist=player_skinned_fuselage_list,
-                )
-
-            # 4. Nuvens Procedurais de Vapor (apenas nos cenários externos 1 e 2)
-            if self.scene_mode in (1, 2):
-                active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
-                draw_procedural_clouds(
-                    active_clouds, cloud_vapor_tex, sim_time,
-                    player_pos=self.player.pos, scene_mode=self.scene_mode
-                )
-
-            # 5. HUD Integrado + Painel de Customização de Skins (visível apenas na Cena 3 e alternável com 'H')
-            if self.hud_enabled:
-                draw_flight_hud(
-                    width, height, self.player,
-                    camera_mode=self.camera.mode,
-                    scene_mode=self.scene_mode,
-                    sim_time=sim_time
-                )
-                if self.scene_mode == 3:
-                    draw_inspection_overlay(
-                        width, height, self.player, self.skin_manager, scene_mode=self.scene_mode
+                # 3. F-14 Tomcat (com suporte à Skin ativa: Padrão, Metálica ou Camuflagem)
+                if self.camera.mode != 2:
+                    draw_f14_complete(
+                        self.player,
+                        player_fuselage_list,
+                        wing_tex,
+                        sim_time,
+                        skin_manager=self.skin_manager,
+                        skinned_fuselage_dlist=player_skinned_fuselage_list,
                     )
 
-            # 6. Alerta de Impacto (Game Over)
-            if self.player.crashed:
-                draw_crash_overlay(width, height, self.player.crash_reason)
+                # 4. Nuvens Procedurais de Vapor (apenas nos cenários externos 1 e 2)
+                if self.scene_mode in (1, 2):
+                    active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
+                    draw_procedural_clouds(
+                        active_clouds, cloud_vapor_tex, sim_time,
+                        player_pos=self.player.pos, scene_mode=self.scene_mode
+                    )
 
-            glfw.swap_buffers(window)
+                # 5. HUD Integrado + Painel de Customização de Skins (visível apenas na Cena 3 e alternável com 'H')
+                if self.hud_enabled:
+                    draw_flight_hud(
+                        width, height, self.player,
+                        camera_mode=self.camera.mode,
+                        scene_mode=self.scene_mode,
+                        sim_time=sim_time
+                    )
+                    if self.scene_mode == 3:
+                        draw_inspection_overlay(
+                            width, height, self.player, self.skin_manager, scene_mode=self.scene_mode
+                        )
 
-        glfw.terminate()
+                # 6. Alerta de Impacto (Game Over)
+                if self.player.crashed:
+                    draw_crash_overlay(width, height, self.player.crash_reason)
+
+                glfw.swap_buffers(window)
+        finally:
+            self.audio.close()
+            glfw.terminate()
 
 
 def select_initial_scene():
