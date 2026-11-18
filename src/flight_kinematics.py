@@ -7,7 +7,7 @@ arrasto do trem de pouso, colisão com ondas físicas do oceano e mundo periódi
 ================================================================================
 """
 
-# TODO: implement maximum speeds and accelerations more consistent with the actual F-14 (1342 kt max)
+# TODO: implement maximum speeds and accelerations more consistent with the actual F-14 (1342 kt max) and real gravity (ex: no throttle and facing up should lead to no air sustentation (faster drop))
 # TODO: check method to simulate/feel g-force on sharp turns
 
 import math

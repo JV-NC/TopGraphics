@@ -832,8 +832,8 @@ def build_f14_static_fuselage_list(wing_tex_id):
     """Compila a Display List original (Padrão VF-84 Jolly Rogers)."""
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
-    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.75, 0.75, 0.80, 1.0])
-    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64.0)
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.28, 0.30, 0.34, 1.0])
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 28.0)
     _compile_f14_fuselage_geometry(wing_tex_id=wing_tex_id, full_skin_uv=False)
     glEndList()
     return dlist
@@ -966,8 +966,8 @@ def draw_f14_complete(
         glBindTexture(GL_TEXTURE_2D, active_tex_id)
         glCallList(skinned_fuselage_dlist)
     else:
-        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.75, 0.75, 0.80, 1.0])
-        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 64.0)
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.28, 0.30, 0.34, 1.0])
+        glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 28.0)
         glCallList(fuselage_dlist)
 
     # 2. Trem de Pouso Retrátil

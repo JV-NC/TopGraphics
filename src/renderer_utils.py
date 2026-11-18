@@ -177,19 +177,29 @@ def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_siz
 # ==============================================================================
 
 def setup_lighting():
-    """Configura o modelo de iluminação de Phong/Gouraud."""
+    """
+    Configura o modelo de iluminação de Phong/Gouraud com Iluminação Hemisférica Suave:
+      - GL_LIGHT0: Luz Direcional Principal do Sol (Key Light com elevação mínima de sombreamento).
+      - GL_LIGHT1: Luz Pontual dinâmica dos pós-combustores do F-14 (Afterburner).
+      - GL_LIGHT2: Luz Direcional de Preenchimento Atmosférico (Sky/Hemisphere Fill Light oposta ao Sol),
+        eliminando sombras excessivamente escuras ao inclinar ou girar a aeronave.
+    """
     glEnable(GL_LIGHTING)
-    glEnable(GL_LIGHT0)  # Luz 0: Sol Direcional
+    glEnable(GL_LIGHT0)  # Luz 0: Sol Direcional (Key Light)
     glEnable(GL_LIGHT1)  # Luz 1: Brilho dinâmico dos pós-combustores do F-14
+    glEnable(GL_LIGHT2)  # Luz 2: Preenchimento Hemisférico Celeste (Fill Light sem especular)
 
     glEnable(GL_COLOR_MATERIAL)
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
     glShadeModel(GL_SMOOTH)
     glEnable(GL_NORMALIZE)
 
-    glLightfv(GL_LIGHT0, GL_AMBIENT,  [0.28, 0.26, 0.30, 1.0])
-    glLightfv(GL_LIGHT0, GL_DIFFUSE,  [1.00, 0.88, 0.72, 1.0])
-    glLightfv(GL_LIGHT0, GL_SPECULAR, [1.00, 0.95, 0.85, 1.0])
+    # Luz ambiente global suave da abóbada celeste
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [0.16, 0.16, 0.18, 1.0])
+
+    glLightfv(GL_LIGHT0, GL_AMBIENT,  [0.26, 0.24, 0.26, 1.0])
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,  [0.62, 0.56, 0.48, 1.0])
+    glLightfv(GL_LIGHT0, GL_SPECULAR, [0.38, 0.35, 0.30, 1.0])
 
     glLightfv(GL_LIGHT1, GL_AMBIENT,  [0.0, 0.0, 0.0, 1.0])
     glLightfv(GL_LIGHT1, GL_DIFFUSE,  [1.0, 0.55, 0.15, 1.0])
@@ -197,6 +207,10 @@ def setup_lighting():
     glLightf(GL_LIGHT1, GL_CONSTANT_ATTENUATION, 1.0)
     glLightf(GL_LIGHT1, GL_LINEAR_ATTENUATION, 0.04)
     glLightf(GL_LIGHT1, GL_QUADRATIC_ATTENUATION, 0.008)
+
+    glLightfv(GL_LIGHT2, GL_AMBIENT,  [0.0, 0.0, 0.0, 1.0])
+    glLightfv(GL_LIGHT2, GL_DIFFUSE,  [0.26, 0.28, 0.34, 1.0])
+    glLightfv(GL_LIGHT2, GL_SPECULAR, [0.0, 0.0, 0.0, 1.0])
 
 
 # ==============================================================================

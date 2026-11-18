@@ -1,3 +1,5 @@
+# TODO: implement key to cycle day/night states (sunrise, noon, sunset/night)
+
 """
 ================================================================================
 TopGraphics | scene_utils.py
@@ -226,27 +228,50 @@ def get_sun_state(sim_time, scene_mode=1):
     sun_core = np.array([1.0, 0.92 + 0.06 * t, 0.72 + 0.20 * t], dtype=np.float32)
     sun_halo = (1.0 - t) * np.array([1.0, 0.38, 0.14], dtype=np.float32) + t * np.array([1.0, 0.72, 0.32], dtype=np.float32)
 
+    # Direção de iluminação 3D (light_dir): mantém elevação mínima de 26°..38° para o
+    # cálculo de sombreamento (mesmo quando o disco solar visual está baixo no horizonte).
+    # Isso evita o estouro especular rasante ao olhar para o sol e ilumina o dorso/convés uniformemente.
+    light_elev_deg = 26.0 + 12.0 * t
+    light_elev_rad = math.radians(light_elev_deg)
+    lx = math.cos(light_elev_rad) * math.sin(SUN_AZIMUTH_RAD)
+    ly = math.sin(light_elev_rad)
+    lz = -math.cos(light_elev_rad) * math.cos(SUN_AZIMUTH_RAD)
+    light_dir = normalize(np.array([lx, ly, lz], dtype=np.float32))
+
+    # Direção da luz hemisférica oposta (GL_LIGHT2 - Sky Fill Light): preenche suavemente
+    # o lado de sombra quando a aeronave inclina (roll) ou gira para longe do sol.
+    fill_dir = normalize(np.array([-lx * 0.75, 0.68, -lz * 0.75], dtype=np.float32))
+
+    # Balanço equilibrado: menor contraste extremo entre luz direta e sombra
     light_ambient = [
-        float(0.24 + 0.10 * t),
-        float(0.20 + 0.12 * t),
-        float(0.24 + 0.10 * t),
+        float(0.28 + 0.08 * t),
+        float(0.25 + 0.09 * t),
+        float(0.28 + 0.08 * t),
         1.0
     ]
     light_diffuse = [
-        1.0,
-        float(0.66 + 0.24 * t),
-        float(0.46 + 0.34 * t),
+        float(0.58 + 0.08 * t),
+        float(0.48 + 0.14 * t),
+        float(0.40 + 0.18 * t),
         1.0
     ]
     light_specular = [
-        1.0,
-        float(0.78 + 0.18 * t),
-        float(0.58 + 0.30 * t),
+        float(0.32 + 0.10 * t),
+        float(0.28 + 0.10 * t),
+        float(0.22 + 0.12 * t),
+        1.0
+    ]
+    fill_diffuse = [
+        float(0.24 + 0.05 * t),
+        float(0.25 + 0.06 * t),
+        float(0.30 + 0.06 * t),
         1.0
     ]
 
     return {
         "dir": sun_dir,
+        "light_dir": light_dir,
+        "fill_dir": fill_dir,
         "progress": t,
         "elev_deg": elev_deg,
         "scene_mode": scene_mode,
@@ -259,23 +284,35 @@ def get_sun_state(sim_time, scene_mode=1):
         "light_ambient": light_ambient,
         "light_diffuse": light_diffuse,
         "light_specular": light_specular,
+        "fill_diffuse": fill_diffuse,
     }
 
 
 def apply_sunrise_lighting(sun_state, lighting_enabled=True):
     """
-    Atualiza a cor de fundo (glClearColor) usando a cor do zênite e configura GL_LIGHT0.
+    Atualiza a cor de fundo (glClearColor) usando a cor do zênite e configura
+    GL_LIGHT0 (Sol Direcional Suavizado) + GL_LIGHT2 (Preenchimento Celeste Hemisférico).
     """
     zc = sun_state["zenith_color"]
     glClearColor(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
 
     if lighting_enabled:
         glEnable(GL_LIGHTING)
-        sdir = sun_state["dir"]
-        glLightfv(GL_LIGHT0, GL_POSITION, [float(sdir[0]), float(sdir[1]), float(sdir[2]), 0.0])
+        glEnable(GL_LIGHT0)
+        glEnable(GL_LIGHT2)
+
+        ldir = sun_state["light_dir"]
+        fdir = sun_state["fill_dir"]
+
+        glLightfv(GL_LIGHT0, GL_POSITION, [float(ldir[0]), float(ldir[1]), float(ldir[2]), 0.0])
         glLightfv(GL_LIGHT0, GL_AMBIENT, sun_state["light_ambient"])
         glLightfv(GL_LIGHT0, GL_DIFFUSE, sun_state["light_diffuse"])
         glLightfv(GL_LIGHT0, GL_SPECULAR, sun_state["light_specular"])
+
+        glLightfv(GL_LIGHT2, GL_POSITION, [float(fdir[0]), float(fdir[1]), float(fdir[2]), 0.0])
+        glLightfv(GL_LIGHT2, GL_AMBIENT, [0.0, 0.0, 0.0, 1.0])
+        glLightfv(GL_LIGHT2, GL_DIFFUSE, sun_state["fill_diffuse"])
+        glLightfv(GL_LIGHT2, GL_SPECULAR, [0.0, 0.0, 0.0, 1.0])
     else:
         glDisable(GL_LIGHTING)
 
