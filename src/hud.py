@@ -149,17 +149,26 @@ _CARDINAL_POINTS = {
 
 
 def _compute_heading_deg(aircraft):
-    """Calcula o rumo magnético/geográfico (000° a 359°) a partir do vetor forward."""
+    """
+    Calcula o rumo magnético/geográfico (000° a 359°) alinhado com o Nascer do Sol a Leste:
+      - Leste (090° E) = -Z (proa inicial do caça e direção do nascer do sol)
+      - Sul   (180° S) = +X
+      - Oeste (270° W) = +Z
+      - Norte (000° N) = -X
+    """
     fx = float(aircraft.forward[0])
     fz = float(aircraft.forward[2])
     if abs(fx) < 1e-6 and abs(fz) < 1e-6:
-        return 0.0
-    hdg = math.degrees(math.atan2(fx, -fz)) % 360.0
+        return 90.0
+    hdg = (math.degrees(math.atan2(fx, -fz)) + 90.0) % 360.0
     return hdg
 
 
 def _compute_gps_strings(aircraft, scene_mode):
-    """Converte as coordenadas (X, Z) do caça em coordenadas geográficas Latitude/Longitude."""
+    """
+    Converte as coordenadas (X, Z) do caça em coordenadas geográficas Latitude/Longitude
+    consistentes com a bússola (-X avança para o Norte/+Lat, -Z avança para o Leste/-Lon W).
+    """
     if scene_mode == 1:
         base_lat = 32.6667
         base_lon = 117.5000
@@ -167,8 +176,8 @@ def _compute_gps_strings(aircraft, scene_mode):
         base_lat = 39.4167
         base_lon = 118.7500
 
-    lat = base_lat + (-float(aircraft.pos[2]) / 111111.0)
-    lon = base_lon - (float(aircraft.pos[0]) / 92000.0)
+    lat = base_lat + (-float(aircraft.pos[0]) / 111111.0)
+    lon = base_lon - (-float(aircraft.pos[2]) / 92000.0)
 
     def to_dms(val, pos_hem, neg_hem):
         hem = pos_hem if val >= 0 else neg_hem

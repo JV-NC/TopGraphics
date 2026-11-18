@@ -172,7 +172,7 @@ def draw_periodic_scene(scene_dlist, player_pos, scene_mode):
 
 SKY_DOME_RADIUS = 2200.0        # Raio da abóbada celeste esférica (dentro do zFar = 3500)
 SUN_DISTANCE = 2100.0           # Distância do disco solar no horizonte (-Z)
-SUN_AZIMUTH_RAD = -0.16         # Leve deslocamento a bombordo/oeste do eixo -Z
+SUN_AZIMUTH_RAD = 0.0           # Alinhado exatamente com o Leste da bússola (090° E no eixo -Z)
 SUN_RISE_DURATION = 240.0       # Tempo (s) para o sol subir da aurora até a manhã alta
 SUN_MIN_ELEV_DEG = 4.5          # Elevação inicial (rasante ao horizonte no início do voo)
 SUN_MAX_ELEV_DEG = 26.0         # Elevação máxima após o ciclo de subida
