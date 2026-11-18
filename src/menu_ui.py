@@ -6,7 +6,7 @@ Sistemas de Interface Gráfica em OpenGL (Menus 2D / 3D Vetoriais):
     (1: Porta-Aviões, 2: Cânion, 3: Hangar de Inspeção), Botão de Configurações e Sair.
   - Tela de Pausa (Pressionar ESC em jogo): Retomar, Configurações e Menu Principal.
   - Tela de Configurações (Sliders interativos para Master, SFX, Ambience, Music,
-    além de botões de Aplicar e Voltar).
+    além de botões de Aplicar e Voltar com espaçamento vertical corrigido).
 ================================================================================
 """
 
@@ -289,7 +289,7 @@ class MenuUI:
                 draw_vector_text(texto, cx, y_pos, scale=9.0, align="center")
 
     def _draw_config_menu(self, width, height):
-        """Desenha a Tela de Configurações de Áudio (Sliders + Botões)."""
+        """Desenha a Tela de Configurações de Áudio (Sliders + Botões sem sobreposição)."""
         glColor4f(0.02, 0.05, 0.09, 0.92)
         glBegin(GL_QUADS)
         glVertex2f(0, 0); glVertex2f(width, 0); glVertex2f(width, height); glVertex2f(0, height)
@@ -297,13 +297,14 @@ class MenuUI:
 
         cx, cy = width * 0.5, height * 0.5
 
-        box_w, box_h = 540.0, 360.0
-        bx0, by0 = cx - box_w * 0.5, cy - box_h * 0.5 + 20.0
+        # Altura ampliada para 410px para acomodar os 4 sliders e os 2 botões com folga
+        box_w, box_h = 540.0, 410.0
+        bx0, by0 = cx - box_w * 0.5, cy - box_h * 0.5 + 15.0
         _draw_hud_panel_box(bx0, by0, bx0 + box_w, by0 + box_h, cut=8.0)
 
         glColor4f(0.25, 1.0, 0.65, 1.0)
         draw_text_title = "CONFIGURACOES DE AUDIO"
-        draw_vector_text(draw_text_title, cx, by0 + box_h - 35.0, scale=12.0, align="center")
+        draw_vector_text(draw_text_title, cx, by0 + box_h - 36.0, scale=12.0, align="center")
 
         sliders = [
             ("VOLUME GERAL", "master"),
@@ -313,7 +314,7 @@ class MenuUI:
         ]
 
         for i, (label, key) in enumerate(sliders):
-            y_pos = by0 + box_h - 90.0 - i * 52.0
+            y_pos = by0 + box_h - 86.0 - i * 54.0
             val = self.temp_volumes[key]
             pct = int(round(val * 100.0))
 
@@ -342,16 +343,24 @@ class MenuUI:
             glVertex2f(bar_x + fill_w, bar_y + bar_h); glVertex2f(bar_x, bar_y + bar_h)
             glEnd()
 
-        # Botões Aplicar e Voltar
+        # Linha divisória sutil separando os sliders dos botões de ação
+        div_y = by0 + 118.0
+        glColor4f(0.15, 0.95, 0.38, 0.28)
+        glBegin(GL_LINES)
+        glVertex2f(cx - 190.0, div_y)
+        glVertex2f(cx + 190.0, div_y)
+        glEnd()
+
+        # Botões Aplicar (by0 + 80.0) e Voltar (by0 + 38.0) bem abaixo do último slider (bar_y = by0 + 144.0)
         botoes = [("APLICAR", 4), ("VOLTAR", 5)]
         for label, idx in botoes:
-            y_pos = by0 + 52.0 if idx == 5 else by0 + 104.0
+            y_pos = by0 + 38.0 if idx == 5 else by0 + 80.0
             if self.config_idx == idx:
                 glColor4f(0.35, 1.0, 0.55, 1.0)
-                draw_vector_text(f"> {label} <", cx, y_pos, scale=9.0, align="center")
+                draw_vector_text(f"> {label} <", cx, y_pos, scale=9.5, align="center")
             else:
                 glColor4f(0.75, 0.88, 0.82, 0.85)
-                draw_vector_text(label, cx, y_pos, scale=8.5, align="center")
+                draw_vector_text(label, cx, y_pos, scale=8.8, align="center")
 
         glColor4f(0.45, 0.75, 0.88, 0.75)
         draw_vector_text("USE [ESQ/DIR] PARA AJUSTAR SLIDERS E [ENTER] PARA CONFIRMAR", cx, by0 - 28.0, scale=7.5, align="center")

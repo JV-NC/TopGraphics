@@ -20,6 +20,7 @@ from scene_utils import (
     SCENE2_Z_MIN, SCENE2_Z_MAX, SCENE2_SPAN_Z,
 )
 
+# TODO: implement particle system similar to scene_carrier to simulate earth and sand flying on fighter jet low pass near ground
 
 # ==============================================================================
 # CONSTANTES DO TERRENO PERIÓDICO (ROUNDABOUT)
