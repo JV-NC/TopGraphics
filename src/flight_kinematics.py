@@ -2,8 +2,8 @@
 ================================================================================
 TopGraphics | flight_kinematics.py
 Cinemática de voo 6-DOF sem Gimbal Lock (base ortonormal local F, U, R + Rodrigues),
-modo solo no convés, pós-combustor (afterburner), arrasto do trem de pouso,
-colisão e mundo periódico ("Roundabout" / Pac-Man).
+modo solo no convés, modo de inspeção estacionária (Cena 3), pós-combustor (afterburner),
+arrasto do trem de pouso, colisão com ondas físicas do oceano e mundo periódico ("Roundabout").
 ================================================================================
 """
 
@@ -28,6 +28,8 @@ from scene_carrier import (
     CARRIER_DECK_HALF_L,
     is_within_cvn65_deck_polygon,
     check_cvn65_extra_collisions,
+    get_ocean_wave_height,
+    trigger_ocean_splash,
 )
 
 GEAR_HEIGHT_OFFSET = 1.45       # Altura do eixo central do F-14 até a base das rodas
@@ -209,8 +211,8 @@ class Aircraft:
 
     def check_collisions(self, prev_pos, scene_mode):
         """
-        Verifica todas as colisões físicas do caça com o Porta-Aviões (CVN-65), Oceano,
-        Rochas 3D e Paredes do Cânion.
+        Verifica todas as colisões físicas do caça com o Porta-Aviões (CVN-65),
+        Ondas Físicas do Oceano, Rochas 3D e Paredes do Cânion.
         """
         if self.crashed:
             return
@@ -248,10 +250,12 @@ class Aircraft:
                     self.trigger_crash("COLISÃO COM O CASCO DO PORTA-AVIÕES!")
                     return
 
-            # 3. Colisão com a Água (Oceano em Y = 0.0)
-            if self.pos[1] <= 1.25:
-                self.pos[1] = 0.8
-                self.trigger_crash("COLISÃO COM O OCEANO!")
+            # 3. Colisão com o Corpo d'Água Físico (altura dinâmica da onda em X, Z)
+            wave_y = get_ocean_wave_height(float(self.pos[0]), float(self.pos[2]))
+            if self.pos[1] <= wave_y + 1.25:
+                self.pos[1] = wave_y + 0.65
+                trigger_ocean_splash(float(self.pos[0]), float(self.pos[2]), intensity=2.4)
+                self.trigger_crash("COLISÃO COM AS ONDAS DO OCEANO!")
                 return
 
         elif scene_mode == 2:
@@ -283,7 +287,7 @@ class Aircraft:
                     return
 
     def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):
-        """Atualiza a cinemática de solo/voo, teleporte Roundabout, pós-combustor, trem de pouso e colisões."""
+        """Atualiza a cinemática de solo/voo/inspeção, teleporte Roundabout, afterburner, trem e colisões."""
         self.last_wrap_delta = np.zeros(3, dtype=np.float32)
 
         if self.crashed:
@@ -343,6 +347,7 @@ class Aircraft:
                 self.on_ground = False
                 if self.speed < self.min_flight_speed:
                     print("[Alerta] Saiu do convés sem velocidade de sustentação!")
+
         # ======================================================================
         # MODO INSPEÇÃO (CENA 3: Suspenso sem translação e sem colisão)
         # ======================================================================
@@ -363,6 +368,7 @@ class Aircraft:
 
             # Mantém posição fixa no centro do domo de inspeção
             self.pos[:] = [0.0, 15.0, 0.0]
+
         # ======================================================================
         # MODO EM VOO (6-DOF Livre sem Gimbal Lock + Mundo Infinito Roundabout)
         # ======================================================================
@@ -410,7 +416,7 @@ class Aircraft:
         self.elevator_roll = roll_input * 15.0
         self.rudder_yaw = yaw_input * 20.0
 
-        # Checa colisões com o porta-aviões, água ou rochas do cânion
+        # Checa colisões com o porta-aviões, ondas físicas do oceano ou rochas do cânion
         self.check_collisions(prev_pos, scene_mode)
 
     def get_model_matrix(self):

@@ -306,10 +306,10 @@ class MenuUI:
         draw_vector_text(draw_text_title, cx, by0 + box_h - 35.0, scale=12.0, align="center")
 
         sliders = [
-            ("VOLUME GERAL (MASTER)", "master"),
-            ("SOUND EFFECTS (SFX)", "sfx"),
+            ("VOLUME GERAL", "master"),
+            ("SOUND EFFECTS", "sfx"),
             ("SOM AMBIENTE", "ambience"),
-            ("TRILHA MUSICAL (MUSIC)", "music"),
+            ("MUSICA", "music"),
         ]
 
         for i, (label, key) in enumerate(sliders):

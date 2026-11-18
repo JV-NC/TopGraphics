@@ -10,6 +10,9 @@ Execução (a partir da raiz do repositório):
 """
 
 # TODO: gamepad integration
+# TODO: fix sun rising on north hud
+# TODO: implement flaps sound and menu sound
+# TODO: fix apply button on sound config
 
 import sys
 import time
@@ -34,7 +37,13 @@ from f14_model import (
 from skin_manager import SkinManager
 from audio_manager import AudioManager
 from menu_ui import MenuUI
-from scene_carrier import create_ocean_texture, create_deck_texture, build_scene1_carrier_list
+from scene_carrier import (
+    create_ocean_texture,
+    create_deck_texture,
+    build_scene1_carrier_list,
+    update_ocean_physics,
+    draw_physical_ocean,
+)
 from scene_canyon import create_canyon_texture, build_scene2_canyon_list
 from scene_inspection import (
     apply_inspection_lighting,
@@ -61,7 +70,7 @@ from hud import draw_flight_hud, draw_crash_overlay
 
 class TopGraphicsApp:
     SCENE_NAMES = {
-        1: "Cena 1: Oceano + Porta-Aviões (CVN-65)",
+        1: "Cena 1: Oceano Físico de Partículas + Porta-Aviões (CVN-65)",
         2: "Cena 2: Cânion Procedural (Trench Run)",
         3: "Cena 3: Hangar de Inspeção Técnica e Customização de Skins",
     }
@@ -344,9 +353,12 @@ class TopGraphicsApp:
                         throttle_in -= 1.0
                         brake_active = True
 
-                # Atualiza cinemática (pausada se is_paused == True)
+                # Atualiza cinemática da aeronave e física do oceano (pausadas se is_paused == True)
                 self.player.update(simulation_dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)
                 self.camera.apply_wrap_delta(self.player.last_wrap_delta)
+
+                if self.scene_mode == 1:
+                    update_ocean_physics(simulation_dt, self.player, sim_time)
 
                 # Sincroniza o áudio (pausado se pause/config)
                 audio_dt = 0.0 if is_paused else dt
@@ -403,7 +415,18 @@ class TopGraphicsApp:
                     glDisable(GL_TEXTURE_2D)
 
                 if self.scene_mode == 1:
+                    # 1. Porta-Aviões USS Enterprise (CVN-65) periódico
                     draw_periodic_scene(scene1_list, self.player.pos, scene_mode=1)
+                    # 2. Corpo d'água físico baseado em partículas (ondas + esteira + spray + downwash)
+                    draw_physical_ocean(
+                        self.player,
+                        ocean_tex,
+                        sim_time if not is_paused else 0.0,
+                        lighting_enabled=self.lighting_enabled,
+                        textures_enabled=self.textures_enabled,
+                        wireframe_mode=self.wireframe_mode,
+                    )
+                    # 3. Reflexo cintilante do nascer do sol sobre as ondas
                     draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time if not is_paused else 0.0)
                 elif self.scene_mode == 2:
                     draw_periodic_scene(scene2_list, self.player.pos, scene_mode=2)
