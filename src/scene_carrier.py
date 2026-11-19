@@ -51,7 +51,7 @@ SCENE1_HALF_PERIOD = 2400.0
 # ==============================================================================
 
 def _create_procedural_ocean_texture():
-    """Fallback procedural 128x128 caso 'assets/ocean_water.png' não seja encontrado."""
+    """Fallback procedural 128x128 caso 'assets/texture/ocean_water.png' não seja encontrado."""
     size = 128
     img = np.zeros((size, size, 3), dtype=np.uint8)
     for y in range(size):
@@ -73,7 +73,7 @@ def _create_procedural_ocean_texture():
 
 def create_ocean_texture():
     """
-    Carrega a textura 'assets/ocean_water.png' (convertendo automaticamente a faixa
+    Carrega a textura 'assets/texture/ocean_water.png' (convertendo automaticamente a faixa
     de ondas monocromática para azul-oceânico naval com mipmaps e repetição espelhada).
     """
     return load_texture_from_assets(

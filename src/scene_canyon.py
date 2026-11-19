@@ -151,7 +151,7 @@ def check_canyon_rock_collisions(pos, right_vec=None, forward_vec=None):
 # ==============================================================================
 
 def _create_procedural_canyon_texture():
-    """Fallback procedural 128x128 caso as texturas de 'assets/' não sejam encontradas."""
+    """Fallback procedural 128x128 caso as texturas de 'assets/texture/' não sejam encontradas."""
     size = 128
     img = np.zeros((size, size, 3), dtype=np.uint8)
     for y in range(size):

@@ -1,7 +1,7 @@
 """
 ================================================================================
 TopGraphics | renderer_utils.py
-Utilitários de renderização 3D compartilhados: carregamento de texturas de 'assets/'
+Utilitários de renderização 3D compartilhados: carregamento de texturas de 'assets/texture/'
 (com fallback procedural), iluminação (Phong) e primitivas com normal automática.
 ================================================================================
 """
@@ -55,7 +55,7 @@ def upload_texture_rgb(img, mirrored_repeat=True, use_mipmaps=True):
 
 def _resolve_asset_path(filename):
     """
-    Localiza um arquivo de textura dentro do diretório 'assets/' independentemente
+    Localiza um arquivo de textura dentro do diretório 'assets/texture/' independentemente
     de o script ter sido executado da raiz do projeto ou de dentro de 'src/'.
     Também procura automaticamente por extensões alternativas (.jpg, .jpeg, .png, .bmp, .webp).
     """
@@ -63,9 +63,9 @@ def _resolve_asset_path(filename):
     project_root = os.path.dirname(module_dir)
 
     search_dirs = [
-        os.path.join(project_root, "assets"),
-        os.path.join(module_dir, "assets"),
-        os.path.join(os.getcwd(), "assets"),
+        os.path.join(project_root, "assets/texture"),
+        os.path.join(module_dir, "assets/texture"),
+        os.path.join(os.getcwd(), "assets/texture"),
         project_root,
         module_dir,
         os.getcwd(),
@@ -88,7 +88,7 @@ def _resolve_asset_path(filename):
 
 def _prepare_asset_image(arr, mode="auto"):
     """
-    Pré-processamento leve e limpo para texturas de 'assets/':
+    Pré-processamento leve e limpo para texturas de 'assets/texture/':
       1. Remove tarjas pretas horizontais/verticais de letterbox nas bordas.
       2. Se a imagem estiver em escala de cinza escura (onde o brilho máximo é ~80/255),
          expande a faixa dinâmica para destacar ondas ou estratos rochosos sob a luz.
@@ -135,7 +135,7 @@ def _prepare_asset_image(arr, mode="auto"):
 
 def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_size=512):
     """
-    Carrega uma textura do diretório 'assets/', aplica o pré-processamento leve,
+    Carrega uma textura do diretório 'assets/texture/', aplica o pré-processamento leve,
     redimensiona para potência de 2 (target_size x target_size) e envia ao OpenGL com Mipmaps.
     Se o arquivo não for encontrado ou o Pillow não estiver instalado, executa fallback_fn().
     """
@@ -154,7 +154,7 @@ def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_siz
                 im_resized = Image.fromarray(arr).resize((target_size, target_size), resample_filter)
                 arr = np.array(im_resized, dtype=np.uint8)
 
-            print(f"[Texturas] Carregada de assets: '{os.path.basename(asset_path)}' ({target_size}x{target_size}, modo={mode})")
+            print(f"[Texturas] Carregada de assets/texture: '{os.path.basename(asset_path)}' ({target_size}x{target_size}, modo={mode})")
             return upload_texture_rgb(arr, mirrored_repeat=True, use_mipmaps=True)
 
         except Exception as exc:
@@ -163,7 +163,7 @@ def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_siz
         if not PIL_AVAILABLE:
             print(f"[Aviso] Biblioteca Pillow (PIL) não instalada ('pip install Pillow'). Usando textura procedural para '{filename}'.")
         else:
-            print(f"[Aviso] Arquivo 'assets/{filename}' não encontrado. Usando textura procedural de fallback.")
+            print(f"[Aviso] Arquivo 'assets/texture/{filename}' não encontrado. Usando textura procedural de fallback.")
 
     if fallback_fn is not None:
         return fallback_fn()
