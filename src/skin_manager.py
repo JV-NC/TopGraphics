@@ -201,7 +201,7 @@ def _upload_skin_texture_rgb(img):
 
 def _load_raw_asset_rgb(filename, target_size=1024, preserve_sharp_pixels=False):
     """
-    Carrega a imagem de 'assets/' preservando 100% da área útil e redimensiona
+    Carrega a imagem de 'assets/texture/' preservando 100% da área útil e redimensiona
     para 1024x1024 para preservar todos os detalhes originais (768x768 / 800x800).
     """
     asset_path = _resolve_asset_path(filename)
@@ -219,7 +219,7 @@ def _load_raw_asset_rgb(filename, target_size=1024, preserve_sharp_pixels=False)
         except Exception as exc:
             print(f"[Skins] Aviso: falha ao ler '{filename}' ({exc}). Usando fallback procedural.")
     else:
-        print(f"[Skins] Aviso: 'assets/{filename}' não encontrado. Gerando padrão procedural.")
+        print(f"[Skins] Aviso: 'assets/texture/{filename}' não encontrado. Gerando padrão procedural.")
     return None
 
 
@@ -242,7 +242,7 @@ def _generate_fallback_metallic(pattern_id, size=1024):
 def _generate_fallback_camo_mask(pattern_id, size=1024):
     """
     Gera máscara procedural nas 4 cores de alto contraste (Vermelho, Verde, Azul, Preto)
-    caso algum arquivo de camuflagem não seja encontrado em assets/.
+    caso algum arquivo de camuflagem não seja encontrado em assets/texture/.
     """
     y, x = np.mgrid[0:size, 0:size].astype(np.float32)
     mask = np.zeros((size, size, 3), dtype=np.uint8)

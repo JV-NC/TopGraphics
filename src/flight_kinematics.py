@@ -82,9 +82,10 @@ class Aircraft:
         self.gear_down = True          # Comando lógico do trem de pouso (Tecla 'Q')
         self.gear_deploy = 1.0         # Estado contínuo da animação: 1.0 (baixado) a 0.0 (recolhido)
 
-        # Estado de colisão / Game Over
+        # Estado de colisão / Game Over ('solid' ou 'water')
         self.crashed = False
         self.crash_reason = ""
+        self.crash_type = "solid"
         self.crash_timer = 0.0
 
         # Deslocamento de teleporte toroidal ocorrido no último frame (para sincronizar a Chase Cam)
@@ -101,6 +102,7 @@ class Aircraft:
         """Reposiciona a aeronave no estado inicial do cenário selecionado (1, 2 ou 3)."""
         self.crashed = False
         self.crash_reason = ""
+        self.crash_type = "solid"
         self.crash_timer = 0.0
         self.afterburner = False
         self.last_wrap_delta = np.zeros(3, dtype=np.float32)
@@ -178,11 +180,12 @@ class Aircraft:
         drag_factor = 1.0 - (1.0 - GEAR_DRAG_ACCEL_MULT) * self.gear_deploy
         return base_accel * drag_factor
 
-    def trigger_crash(self, reason):
-        """Ativa o estado de Game Over e agenda o reset automático."""
+    def trigger_crash(self, reason, crash_type="solid"):
+        """Ativa o estado de Game Over ('solid' ou 'water') e agenda o reset automático."""
         if not self.crashed:
             self.crashed = True
             self.crash_reason = reason
+            self.crash_type = crash_type
             self.crash_timer = 2.0  # Segundos até reiniciar automaticamente
             self.speed = 0.0
             self.throttle = 0.0
@@ -221,7 +224,7 @@ class Aircraft:
             # 1. Colisão com a Ilha Nuclear SCANFAR, Domo Beehive, Mastro em Treliça, Guindaste ou JBD
             hit_struct, reason = check_cvn65_extra_collisions(self.pos, self.right, self.forward)
             if hit_struct:
-                self.trigger_crash(reason)
+                self.trigger_crash(reason, crash_type="solid")
                 return
 
             # 2. Interação e Colisão com o Convés / Casco do Porta-Aviões
@@ -239,15 +242,15 @@ class Aircraft:
                         print("[Pouso] Toque suave no convés! Pós-combustor desligado. Segure 'S' para frear.")
                     elif self.gear_deploy <= 0.75:
                         self.pos[1] = CARRIER_DECK_Y + 0.4
-                        self.trigger_crash("IMPACTO NO CONVÉS SEM O TREM DE POUSO BAIXADO!")
+                        self.trigger_crash("IMPACTO NO CONVÉS SEM O TREM DE POUSO BAIXADO!", crash_type="solid")
                         return
                     else:
                         self.pos[1] = CARRIER_DECK_Y + 0.5
-                        self.trigger_crash("POUSO MUITO VIOLENTO OU DESNIVELADO NO CONVÉS!")
+                        self.trigger_crash("POUSO MUITO VIOLENTO OU DESNIVELADO NO CONVÉS!", crash_type="solid")
                         return
 
                 elif not self.on_ground and self.pos[1] < CARRIER_DECK_Y:
-                    self.trigger_crash("COLISÃO COM O CASCO DO PORTA-AVIÕES!")
+                    self.trigger_crash("COLISÃO COM O CASCO DO PORTA-AVIÕES!", crash_type="solid")
                     return
 
             # 3. Colisão com o Corpo d'Água Físico (altura dinâmica da onda em X, Z)
@@ -255,7 +258,7 @@ class Aircraft:
             if self.pos[1] <= wave_y + 1.25:
                 self.pos[1] = wave_y + 0.65
                 trigger_ocean_splash(float(self.pos[0]), float(self.pos[2]), intensity=2.4)
-                self.trigger_crash("COLISÃO COM AS ONDAS DO OCEANO!")
+                self.trigger_crash("COLISÃO COM AS ONDAS DO OCEANO!", crash_type="water")
                 return
 
         elif scene_mode == 2:
@@ -263,13 +266,13 @@ class Aircraft:
             target_z = CANYON_BUNKER_Z
             target_x = canyon_center_x(target_z)
             if (abs(self.pos[0] - target_x) <= 12.5) and (abs(self.pos[2] - target_z) <= 12.5) and (self.pos[1] <= 15.5):
-                self.trigger_crash("IMPACTO DIRETO COM O BUNKER ALVO!")
+                self.trigger_crash("IMPACTO DIRETO COM O BUNKER ALVO!", crash_type="solid")
                 return
 
             # 2. Colisão com as Rochas / Matacões 3D procedurais do cânion
             hit_rock, rock_reason = check_canyon_rock_collisions(self.pos, self.right, self.forward)
             if hit_rock:
-                self.trigger_crash(rock_reason)
+                self.trigger_crash(rock_reason, crash_type="solid")
                 return
 
             # 3. Colisão com o solo e paredões rochosos do Cânion Procedural
@@ -283,7 +286,7 @@ class Aircraft:
             for pt in sample_points:
                 ground_y = canyon_height_func(float(pt[0]), float(pt[2]))
                 if pt[1] <= ground_y + 1.35:
-                    self.trigger_crash("COLISÃO COM AS PAREDES DO CÂNION!")
+                    self.trigger_crash("COLISÃO COM AS PAREDES DO CÂNION!", crash_type="solid")
                     return
 
     def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):

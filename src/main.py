@@ -10,9 +10,8 @@ Execução (a partir da raiz do repositório):
 """
 
 # TODO: gamepad integration
-# TODO: fix sun rising on north hud
+# TODO: implement key to cycle day/night states (sunrise, noon, sunset/night)
 # TODO: implement flaps sound and menu sound
-# TODO: fix apply button on sound config
 
 import sys
 import time
@@ -369,6 +368,8 @@ class TopGraphicsApp:
                     crashed=self.player.crashed,
                     aircraft_speed=self.player.speed,
                     on_ground=self.player.on_ground,
+                    crash_type=getattr(self.player, "crash_type", "solid"),
+                    crash_reason=self.player.crash_reason,
                 )
 
                 if self.scene_mode == 3:

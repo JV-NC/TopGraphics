@@ -14,8 +14,6 @@ Gerenciador e Mixer de Áudio em Tempo Real (Independente do Renderer OpenGL):
 ================================================================================
 """
 
-# TODO: implement solid and water crash sounds
-
 import os
 import sys
 import math
@@ -366,6 +364,11 @@ class AudioManager:
         """
         filepath = self._resolve_audio_path(cfg.get("path"))
         if filepath is None:
+            for alt_p in cfg.get("alt_paths", ()):
+                filepath = self._resolve_audio_path(alt_p)
+                if filepath is not None:
+                    break
+        if filepath is None:
             if not cfg.get("optional", False):
                 print(f"[Áudio] Aviso: arquivo não encontrado para '{name}' ({cfg.get('path')}).")
             return None
@@ -715,11 +718,21 @@ class AudioManager:
     # ATUALIZAÇÃO CONTÍNUA POR FRAME (CHAMADA NO LOOP DO MAIN.PY)
     # --------------------------------------------------------------------------
 
-    def update(self, dt, throttle, afterburner, crashed, aircraft_speed, on_ground=False):
+    def update(
+        self,
+        dt,
+        throttle,
+        afterburner,
+        crashed,
+        aircraft_speed,
+        on_ground=False,
+        crash_type="solid",
+        crash_reason="",
+    ):
         """
         Atualiza em tempo real os ganhos dos segmentos de motor (JET_WHINE, COMBUSTION,
         EFSC Afterburner), perspectiva interna/externa, rolagem no solo e eventos de
-        toque no convés (touchdown) ou colisão (shutdown).
+        toque no convés (touchdown) ou colisão sólida/aquática + corte (shutdown).
         """
         if not self._running:
             return
@@ -732,15 +745,21 @@ class AudioManager:
             self._prev_throttle = throttle
             return
 
-        # 2. Se ocorreu colisão neste frame, silencia motores e dispara som de corte (shutdown)
+        # 2. Se ocorreu colisão neste frame, silencia motores e dispara som de impacto + corte (shutdown)
         if crashed:
             if not self._prev_crashed:
                 self._fade_out_flight_loops()
+                self.trigger_crash_sfx(crash_type=crash_type, crash_reason=crash_reason)
                 self.trigger_engine_shutdown()
             self._prev_crashed = True
             self._prev_on_ground = on_ground
             self._prev_throttle = throttle
             return
+
+        # Se acabou de reiniciar de um crash (ex: pressionou 'R' antes de 2s), encerra suavemente os SFX de impacto
+        if self._prev_crashed and not crashed:
+            self.stop_sfx("crash_boom", fade_out_sec=0.15)
+            self.stop_sfx("crash_water_splash", fade_out_sec=0.15)
 
         self._prev_crashed = False
 
@@ -891,6 +910,24 @@ class AudioManager:
         self.stop_sfx(f"engine_comb_start_{persp}", fade_out_sec=0.1)
         self.stop_sfx(f"engine_starter_{persp}", fade_out_sec=0.1)
         self.play_sfx(f"engine_shutdown_{persp}", restart=True)
+
+    def trigger_crash_sfx(self, crash_type="solid", crash_reason=""):
+        """
+        Dispara os efeitos sonoros de colisão:
+          - Colisão sólida (navio, convés, rochas, paredes, bunker): toca 'crash_boom' (boom_crash.wav).
+          - Colisão na água (ondas do oceano): toca simultaneamente 'crash_boom' + 'crash_water_splash'
+            (boom_crash.wav + water_splash.wav), combinando o impacto grave com o splash agudo.
+        """
+        reason_upper = str(crash_reason).upper()
+        is_water = (
+            crash_type == "water"
+            or "OCEANO" in reason_upper
+            or "AGUA" in reason_upper
+            or "ÁGUA" in reason_upper
+        )
+        self.play_sfx("crash_boom", restart=True)
+        if is_water:
+            self.play_sfx("crash_water_splash", restart=True)
 
     # --------------------------------------------------------------------------
     # CONTROLES DE VOLUME, VELOCIDADE E MUTE (PARA ATALHOS E FUTURA GUI)
