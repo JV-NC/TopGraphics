@@ -368,6 +368,8 @@ class TopGraphicsApp:
                     crashed=self.player.crashed,
                     aircraft_speed=self.player.speed,
                     on_ground=self.player.on_ground,
+                    crash_type=getattr(self.player, "crash_type", "solid"),
+                    crash_reason=self.player.crash_reason,
                 )
 
                 if self.scene_mode == 3:

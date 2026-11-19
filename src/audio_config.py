@@ -486,6 +486,24 @@ CLIP_CONFIG = {
         "loop": True, "volume": 0.36, "speed": 1.0,
     },
 
+    # Impacto / Explosão em colisão sólida e aquática (boom_crash.wav: 1.80s, 48kHz, RMS -15.2 dBFS, Peak 0.0 dBFS)
+    "crash_boom": {
+        "path": "assets/audio/aircraft/events/boom_crash.wav",
+        "category": "sfx",
+        "start_sec": 0.0, "end_sec": 1.80,
+        "loop": False, "volume": 0.78, "speed": 1.0,
+        "fade_in_sec": 0.005, "fade_out_sec": 0.12,
+    },
+
+    # Colisão na água (water_splash.wav: 2.04s, 48kHz, RMS -25.9 dBFS, Peak -0.7 dBFS, centroide 4.3 kHz)
+    "crash_water_splash": {
+        "path": "assets/audio/aircraft/events/water_splash.wav",
+        "category": "sfx",
+        "start_sec": 0.0, "end_sec": 1.95,
+        "loop": False, "volume": 0.95, "speed": 1.0,
+        "fade_in_sec": 0.005, "fade_out_sec": 0.15,
+    },
+
     # Placeholder documentado para sprint futura (refatoração de partes móveis / flaps):
     # "flaps": {
     #     "path": "assets/audio/aircraft/events/FLAPS.wav",
