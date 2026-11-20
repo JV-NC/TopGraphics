@@ -576,8 +576,8 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         draw_vector_text("AB [E]: DESLIGADO [MIL]", lx0 + 12.0, ly0 + 12.0, scale=8.8, align="left")
 
     rx1 = width - 22.0
-    rx0 = rx1 - 268.0
-    ry0, ry1 = 20.0, 128.0
+    rx0 = rx1 - 278.0
+    ry0, ry1 = 20.0, 146.0
     _draw_hud_panel_box(rx0, ry0, rx1, ry1, cut=6.0)
 
     if aircraft.gear_deploy > 0.95:
@@ -591,10 +591,10 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         gear_col = (1.0, 0.75, 0.18, 1.0)
 
     glColor4f(*gear_col)
-    draw_vector_text(gear_txt, rx0 + 12.0, ry1 - 24.0, scale=8.8, align="left")
+    draw_vector_text(gear_txt, rx0 + 12.0, ry1 - 22.0, scale=8.6, align="left")
 
     gx_center = rx0 + 48.0
-    gy_center = ry1 - 54.0
+    gy_center = ry1 - 50.0
     wheel_offsets = [(0.0, 10.0), (-14.0, -6.0), (14.0, -6.0)]
     for wx, wy in wheel_offsets:
         if aircraft.gear_deploy > 0.90:
@@ -620,15 +620,34 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
             glVertex2f(gx_center + wx - 4.0, gy_center + wy + 2.0)
             glEnd()
 
+    # Status dos Wing Spoilers (ativo abaixo de 57°, travado em >= 57°)
+    spoilers_locked = getattr(aircraft, "spoilers_locked", False)
+    sp_l = float(getattr(aircraft, "spoiler_left_deg", 0.0))
+    sp_r = float(getattr(aircraft, "spoiler_right_deg", 0.0))
+    if spoilers_locked:
+        sp_txt = "SPLR: TRAV"
+        sp_col = (1.0, 0.68, 0.18, 0.95)
+    elif sp_l > 1.5 or sp_r > 1.5:
+        sp_side = "ESQ" if sp_l >= sp_r else "DIR"
+        sp_ang = max(sp_l, sp_r)
+        sp_txt = f"SPLR: {sp_side} {sp_ang:02.0f}°"
+        sp_col = (0.35, 0.95, 1.0, 1.0)
+    else:
+        sp_txt = "SPLR: ATIVO"
+        sp_col = (0.45, 0.95, 0.62, 0.88)
+
+    glColor4f(*sp_col)
+    draw_vector_text(sp_txt, rx0 + 12.0, ry0 + 34.0, scale=8.2, align="left")
+
     sweep_mode_str = "AUTO" if aircraft.auto_wing_sweep else "MAN"
     glColor4f(0.35, 1.0, 0.55, 0.95)
     draw_vector_text(
         f"ASAS [G]: {aircraft.wing_sweep_angle:02.0f}° {sweep_mode_str}",
-        rx0 + 12.0, ry0 + 12.0, scale=8.8, align="left"
+        rx0 + 12.0, ry0 + 12.0, scale=8.6, align="left"
     )
 
     icon_x = rx1 - 46.0
-    icon_y = ry0 + 54.0
+    icon_y = ry0 + 64.0
     sweep_rad = math.radians(float(aircraft.wing_sweep_angle))
 
     glColor4f(0.30, 1.0, 0.52, 0.90)
@@ -645,11 +664,21 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     wing_len = 24.0
     wx_span = wing_len * math.cos(sweep_rad)
     wy_back = wing_len * math.sin(sweep_rad)
-    glColor4f(0.55, 1.0, 0.70, 1.0)
     glLineWidth(2.2)
     glBegin(GL_LINES)
+    # Asa esquerda (destaca em ciano quando o spoiler esquerdo atua)
+    if sp_l > 1.5 and not spoilers_locked:
+        glColor4f(0.35, 0.95, 1.0, 1.0)
+    else:
+        glColor4f(0.55, 1.0, 0.70, 1.0)
     glVertex2f(icon_x - 5.0, icon_y + 6.0)
     glVertex2f(icon_x - 5.0 - wx_span, icon_y + 6.0 - wy_back)
+
+    # Asa direita (destaca em ciano quando o spoiler direito atua)
+    if sp_r > 1.5 and not spoilers_locked:
+        glColor4f(0.35, 0.95, 1.0, 1.0)
+    else:
+        glColor4f(0.55, 1.0, 0.70, 1.0)
     glVertex2f(icon_x + 5.0, icon_y + 6.0)
     glVertex2f(icon_x + 5.0 + wx_span, icon_y + 6.0 - wy_back)
     glEnd()

@@ -2,19 +2,20 @@
 ================================================================================
 TopGraphics | f14_model.py
 Modelo low-poly de alta fidelidade do F-14 Tomcat: fuselagem por seções transversais, canopy,
-naceles, asas de geometria variável, trem de pouso retrátil, profundores, pós-combustores
-e suporte completo ao Sistema de Customização de Skins (Padrão, Metálicas e Camuflagens)
-com Mapeamento UV Triplanar Métrico (livre de distorções de aspecto ou cisalhamento).
+naceles, asas de geometria variável com 4 painéis articulados de Wing Spoilers por asa
+(com baia interna, pistões hidráulicos e mapeamento UV sincronizado às skins),
+trem de pouso retrátil, tailerons diferenciais, lemes duplos, pós-combustores e
+suporte completo ao Sistema de Customização de Skins (Mapeamento UV Triplanar Métrico).
 ================================================================================
 """
 
-# TODO: refactor movable parts of the aircraft (spoiler wings, flaps, tailerons, rudders, elevators)
+# TODO: evaluate and implement trailing-edge flaps, automatic combat slats and split dorsal/ventral air brakes
 
 import math
 import numpy as np
 from OpenGL.GL import *
 
-from math_utils import compute_normal
+from math_utils import compute_normal, normalize
 from renderer_utils import (
     draw_box, draw_quad_with_normal, draw_tri_with_normal, upload_texture_rgb
 )
@@ -24,10 +25,29 @@ from renderer_utils import (
 SKIN_UV_SCALE = 0.42
 SKIN_UV_OFFSET = 0.37
 
+# Segmentação dos 4 painéis de Wing Spoilers por asa (fração de envergadura da raiz até a ponta)
+# Deixa a faixa traseira (v_chord = 0.58..0.98) livre para futura implementação dos Flaps!
+WING_SPOILER_SPAN_SEGMENTS = (
+    (0.14, 0.305),
+    (0.32, 0.485),
+    (0.50, 0.665),
+    (0.68, 0.845),
+)
+WING_SPOILER_CHORD_START = 0.14   # Linha de dobradiça (hinge) no extradorso traseiro da asa
+WING_SPOILER_CHORD_END = 0.54     # Bordo de fuga dos spoilers (antes dos futuros flaps)
+WING_SPOILER_THICKNESS = 0.022    # Espessura estrutural da placa do spoiler (m)
+
 
 # ==============================================================================
-# MAPEAMENTO UV TRIPLANAR MÉTRICO
+# UTILITÁRIOS DE ROTAÇÃO LOCAL E MAPEAMENTO UV TRIPLANAR MÉTRICO
 # ==============================================================================
+
+def _rotate_vec_axis(vec, axis, angle_rad):
+    """Rotaciona o vetor 3D 'vec' em torno do eixo unitário 'axis' (Fórmula de Rodrigues)."""
+    cos_a = math.cos(angle_rad)
+    sin_a = math.sin(angle_rad)
+    return vec * cos_a + np.cross(axis, vec) * sin_a + axis * float(np.dot(axis, vec)) * (1.0 - cos_a)
+
 
 def _project_planar_uv(vertex, normal, scale=SKIN_UV_SCALE):
     """
@@ -40,7 +60,7 @@ def _project_planar_uv(vertex, normal, scale=SKIN_UV_SCALE):
     nx, ny, nz = abs(float(normal[0])), abs(float(normal[1])), abs(float(normal[2]))
 
     if ny >= nx and ny >= nz:
-        # Superfícies predominantemente horizontais (dorso, ventre, asas, tailerons, luvas)
+        # Superfícies predominantemente horizontais (dorso, ventre, asas, spoilers, tailerons, luvas)
         u = vx * scale + SKIN_UV_OFFSET
         v = vz * scale + SKIN_UV_OFFSET
     elif nx >= ny and nx >= nz:
@@ -63,6 +83,16 @@ def draw_quad_planar_uv(p1, p2, p3, p4, scale=SKIN_UV_SCALE):
         u, v = _project_planar_uv(pt, n, scale)
         glTexCoord2f(u, v)
         glVertex3fv(pt)
+
+
+def _draw_quad_explicit_uv(p1, p2, p3, p4, uv1, uv2, uv3, uv4):
+    """Desenha um quadrilátero com normal automática e coordenadas UV pré-fixadas na placa."""
+    n = compute_normal(p1, p2, p3)
+    glNormal3fv(n)
+    glTexCoord2f(uv1[0], uv1[1]); glVertex3fv(p1)
+    glTexCoord2f(uv2[0], uv2[1]); glVertex3fv(p2)
+    glTexCoord2f(uv3[0], uv3[1]); glVertex3fv(p3)
+    glTexCoord2f(uv4[0], uv4[1]); glVertex3fv(p4)
 
 
 def draw_tri_planar_uv(p1, p2, p3, scale=SKIN_UV_SCALE):
@@ -181,6 +211,29 @@ def draw_cylinder_z(
             ang = (2.0 * math.pi * i) / segments
             glVertex3f(r2 * math.cos(ang) * x_scale, r2 * math.sin(ang) * y_scale, z2)
         glEnd()
+
+
+def _draw_strut_between(p_start, p_end, radius=0.014):
+    """Desenha uma haste hidráulica prismática fina entre dois pontos 3D."""
+    p_a = np.asarray(p_start, dtype=np.float32)
+    p_b = np.asarray(p_end, dtype=np.float32)
+    axis = p_b - p_a
+    length = float(np.linalg.norm(axis))
+    if length < 1e-4:
+        return
+    axis_u = axis / length
+    ref = np.array([1.0, 0.0, 0.0], dtype=np.float32) if abs(axis_u[0]) < 0.8 else np.array([0.0, 0.0, 1.0], dtype=np.float32)
+    u_vec = normalize(np.cross(axis_u, ref)) * radius
+    v_vec = normalize(np.cross(axis_u, u_vec)) * radius
+
+    ring_a = [p_a + u_vec, p_a + v_vec, p_a - u_vec, p_a - v_vec]
+    ring_b = [p_b + u_vec, p_b + v_vec, p_b - u_vec, p_b - v_vec]
+
+    glBegin(GL_QUADS)
+    for k in range(4):
+        kn = (k + 1) % 4
+        draw_quad_with_normal(ring_a[k], ring_a[kn], ring_b[kn], ring_b[k])
+    glEnd()
 
 
 def draw_prism_section(sec1, sec2, tex_scale=0.0, planar_uv=False):
@@ -682,7 +735,7 @@ def _compile_f14_fuselage_geometry(wing_tex_id=None, full_skin_uv=False):
         draw_surface_box(0.22, 0.10, 2.50, uv_scale=1.0, planar_uv=full_skin_uv)
         glPopMatrix()
 
-    # Espinha Dorsal Superior e Painéis Inclinados do Pancake (agora com UV métrico sem esticar!)
+    # Espinha Dorsal Superior e Painéis Inclinados do Pancake
     glColor3f(0.96, 0.97, 0.99) if full_skin_uv else glColor3f(0.75, 0.78, 0.82)
     glPushMatrix()
     glTranslatef(0.0, 0.36, 1.45)
@@ -852,11 +905,194 @@ def build_f14_skinned_fuselage_list():
 
 
 # ==============================================================================
-# ASAS DE GEOMETRIA VARIÁVEL (SLATS, FLAPS/SPOILERS)
+# WING SPOILERS ARTICULADOS (4 PAINÉIS POR ASA COM INTEGRAÇÃO TOTAL DE SKINS)
 # ==============================================================================
 
-def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_skin_uv=False):
-    """Desenha uma asa móvel do F-14 a partir do seu pivô local (0, 0, 0) sem estiramento UV."""
+def _eval_wing_upper_rear_point(u_span, v_chord, root_mc, root_te, tip_mc, tip_te):
+    """
+    Interpola bilinearmente um ponto 3D sobre o extradorso traseiro da asa móvel:
+      - u_span  em [0.0 .. 1.0]: raiz da asa (0) até a ponta (1).
+      - v_chord em [0.0 .. 1.0]: crista de espessura máxima mc (0) até o bordo de fuga te (1).
+    """
+    p_mc = root_mc * (1.0 - u_span) + tip_mc * u_span
+    p_te = root_te * (1.0 - u_span) + tip_te * u_span
+    return p_mc * (1.0 - v_chord) + p_te * v_chord
+
+
+def _compute_wing_spoiler_uv(flush_pt, u_span, v_chord, wing_normal, side, full_skin_uv):
+    """
+    Calcula coordenadas UV para o topo de um painel de spoiler de modo que a textura
+    da skin (VF-84 padrão, Metálica ou Camuflagem) case 1:1 com a superfície da asa
+    quando o spoiler está rente (0°) e se mova rigidamente com a placa ao abrir.
+    """
+    if full_skin_uv:
+        return _project_planar_uv(flush_pt, wing_normal, SKIN_UV_SCALE)
+    if side > 0:
+        return (v_chord, u_span)
+    return (1.0 - v_chord, u_span)
+
+
+def draw_f14_wing_spoilers(
+    side, wing_tex_id, spoiler_deg, root_mc, root_te, tip_mc, tip_te, full_skin_uv=False
+):
+    """
+    Renderiza os 4 painéis segmentados de Wing Spoilers no extradorso de cada asa:
+      - Quando spoiler_deg == 0° (neutro ou travado em enflecamento >= 57°), ficam
+        totalmente rentes ao extradorso da asa, integrando-se à skin ativa.
+      - Ao defletir para cima (até 55° na asa que abaixa em rolagem), articulam-se
+        exatamente em torno de sua linha de dobradiça dianteira (hinge line), expondo
+        a baia estrutural escura, a moldura vermelha de advertência e o pistão hidráulico.
+    """
+    r_mc = np.asarray(root_mc, dtype=np.float32)
+    r_te = np.asarray(root_te, dtype=np.float32)
+    t_mc = np.asarray(tip_mc, dtype=np.float32)
+    t_te = np.asarray(tip_te, dtype=np.float32)
+
+    # Normal unitária apontando para cima (+Y) no plano do extradorso traseiro da asa
+    if side > 0:
+        wing_n = normalize(np.cross(r_te - r_mc, t_mc - r_mc))
+    else:
+        wing_n = normalize(np.cross(t_mc - r_mc, r_te - r_mc))
+
+    deflect_deg = max(0.0, float(spoiler_deg))
+    is_raised = deflect_deg > 0.6
+    hinge_angle_rad = math.radians(-deflect_deg * side)
+
+    # Pequeno deslocamento normal (8 mm) para evitar Z-fighting quando travado rente à asa
+    flush_offset = wing_n * 0.008
+    bay_offset = wing_n * 0.003
+
+    for u_in, u_out in WING_SPOILER_SPAN_SEGMENTS:
+        v_le = WING_SPOILER_CHORD_START
+        v_te = WING_SPOILER_CHORD_END
+
+        # 4 cantos do painel na posição fechada (rente à asa)
+        f_le_in  = _eval_wing_upper_rear_point(u_in,  v_le, r_mc, r_te, t_mc, t_te) + flush_offset
+        f_le_out = _eval_wing_upper_rear_point(u_out, v_le, r_mc, r_te, t_mc, t_te) + flush_offset
+        f_te_out = _eval_wing_upper_rear_point(u_out, v_te, r_mc, r_te, t_mc, t_te) + flush_offset
+        f_te_in  = _eval_wing_upper_rear_point(u_in,  v_te, r_mc, r_te, t_mc, t_te) + flush_offset
+
+        # UVs fixadas na geometria rente da placa (sem escorregamento de textura ao abrir)
+        uv_le_in  = _compute_wing_spoiler_uv(f_le_in,  u_in,  v_le, wing_n, side, full_skin_uv)
+        uv_le_out = _compute_wing_spoiler_uv(f_le_out, u_out, v_le, wing_n, side, full_skin_uv)
+        uv_te_out = _compute_wing_spoiler_uv(f_te_out, u_out, v_te, wing_n, side, full_skin_uv)
+        uv_te_in  = _compute_wing_spoiler_uv(f_te_in,  u_in,  v_te, wing_n, side, full_skin_uv)
+
+        # Rotação em torno da linha de dobradiça dianteira (f_le_in -> f_le_out)
+        hinge_axis = normalize(f_le_out - f_le_in)
+        if is_raised:
+            top_le_in = f_le_in
+            top_le_out = f_le_out
+            top_te_in = f_le_in + _rotate_vec_axis(f_te_in - f_le_in, hinge_axis, hinge_angle_rad)
+            top_te_out = f_le_out + _rotate_vec_axis(f_te_out - f_le_out, hinge_axis, hinge_angle_rad)
+            panel_n = normalize(_rotate_vec_axis(wing_n, hinge_axis, hinge_angle_rad))
+        else:
+            top_le_in, top_le_out = f_le_in, f_le_out
+            top_te_in, top_te_out = f_te_in, f_te_out
+            panel_n = wing_n
+
+        # ----------------------------------------------------------------------
+        # 1. FACE SUPERIOR DO SPOILER (TEXTURIZADA COM A SKIN ATIVA DO F-14)
+        # ----------------------------------------------------------------------
+        glBindTexture(GL_TEXTURE_2D, wing_tex_id)
+        if full_skin_uv:
+            glColor3f(0.95, 0.96, 0.98)
+        else:
+            # Leve contraste tonal no VF-84 para evidenciar as 4 placas no extradorso
+            glColor3f(0.70, 0.73, 0.78)
+
+        glBegin(GL_QUADS)
+        if side > 0:
+            _draw_quad_explicit_uv(
+                top_le_in, top_te_in, top_te_out, top_le_out,
+                uv_le_in, uv_te_in, uv_te_out, uv_le_out
+            )
+        else:
+            _draw_quad_explicit_uv(
+                top_le_out, top_te_out, top_te_in, top_le_in,
+                uv_le_out, uv_te_out, uv_te_in, uv_le_in
+            )
+        glEnd()
+
+        # ----------------------------------------------------------------------
+        # 2. DETALHES ESTRUTURAIS (SEAMS, ESPESSURA, BAIA INTERNA E ATUADOR)
+        # ----------------------------------------------------------------------
+        glPushAttrib(GL_TEXTURE_BIT | GL_ENABLE_BIT | GL_LINE_BIT)
+        glDisable(GL_TEXTURE_2D)
+
+        if not is_raised:
+            # Linhas sutis de contorno das placas quando travadas rentes à asa
+            seam_off = wing_n * 0.002
+            glColor3f(0.24, 0.26, 0.30)
+            glLineWidth(1.1)
+            glBegin(GL_LINE_LOOP)
+            glVertex3fv(top_le_in + seam_off)
+            glVertex3fv(top_te_in + seam_off)
+            glVertex3fv(top_te_out + seam_off)
+            glVertex3fv(top_le_out + seam_off)
+            glEnd()
+        else:
+            # Face inferior do painel (espessura estrutural 3D + acabamento interno US Navy)
+            thick_vec = panel_n * WING_SPOILER_THICKNESS
+            bot_le_in  = top_le_in  - thick_vec
+            bot_le_out = top_le_out - thick_vec
+            bot_te_out = top_te_out - thick_vec
+            bot_te_in  = top_te_in  - thick_vec
+
+            # Intradorso do spoiler em vermelho-advertência escuro (padrão naval F-14)
+            glColor3f(0.62, 0.16, 0.15)
+            glBegin(GL_QUADS)
+            if side > 0:
+                draw_quad_with_normal(bot_le_in, bot_le_out, bot_te_out, bot_te_in)
+            else:
+                draw_quad_with_normal(bot_le_out, bot_le_in, bot_te_in, bot_te_out)
+            glEnd()
+
+            # Bordas laterais e bordo de fuga da placa (espessura sólida)
+            glColor3f(0.32, 0.35, 0.40)
+            glBegin(GL_QUADS)
+            if side > 0:
+                draw_quad_with_normal(top_te_in, bot_te_in, bot_te_out, top_te_out)
+                draw_quad_with_normal(top_le_in, bot_le_in, bot_te_in, top_te_in)
+                draw_quad_with_normal(top_te_out, bot_te_out, bot_le_out, top_le_out)
+            else:
+                draw_quad_with_normal(top_te_out, bot_te_out, bot_te_in, top_te_in)
+                draw_quad_with_normal(top_te_in, bot_te_in, bot_le_in, top_le_in)
+                draw_quad_with_normal(top_le_out, bot_le_out, bot_te_out, top_te_out)
+            glEnd()
+
+            # Baia escura exposta sob o spoiler no extradorso da asa
+            b_le_in  = f_le_in  - flush_offset + bay_offset
+            b_le_out = f_le_out - flush_offset + bay_offset
+            b_te_out = f_te_out - flush_offset + bay_offset
+            b_te_in  = f_te_in  - flush_offset + bay_offset
+
+            glColor3f(0.11, 0.12, 0.14)
+            glBegin(GL_QUADS)
+            if side > 0:
+                draw_quad_with_normal(b_le_in, b_te_in, b_te_out, b_le_out)
+            else:
+                draw_quad_with_normal(b_le_out, b_te_out, b_te_in, b_le_in)
+            glEnd()
+
+            # Haste do pistão hidráulico ligando o fundo da baia à face inferior do painel
+            bay_anchor = 0.5 * (b_le_in + b_le_out) * 0.45 + 0.5 * (b_te_in + b_te_out) * 0.55
+            panel_anchor = 0.5 * (bot_le_in + bot_le_out) * 0.40 + 0.5 * (bot_te_in + bot_te_out) * 0.60
+            glColor3f(0.76, 0.79, 0.84)
+            _draw_strut_between(bay_anchor, panel_anchor, radius=0.013)
+
+        glPopAttrib()
+
+
+# ==============================================================================
+# ASAS DE GEOMETRIA VARIÁVEL (EXTRADO, INTRADORSO, SLATS E WING SPOILERS)
+# ==============================================================================
+
+def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, spoiler_deg, full_skin_uv=False):
+    """
+    Desenha uma asa móvel do F-14 a partir do seu pivô local (0, 0, 0),
+    incluindo os 4 painéis articulados de Wing Spoilers integrados à skin ativa.
+    """
     glBindTexture(GL_TEXTURE_2D, wing_tex_id)
     glColor3f(0.96, 0.97, 0.99) if full_skin_uv else glColor3f(0.75, 0.77, 0.81)
 
@@ -884,6 +1120,18 @@ def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_ski
         draw_surface_quad(root_mb, root_te, tip_te, tip_mb, 1.0, planar_uv=full_skin_uv)
     glEnd()
 
+    # Wing Spoilers (4 painéis articulados com skin sincronizada e trava em >= 57°)
+    draw_f14_wing_spoilers(
+        side=side,
+        wing_tex_id=wing_tex_id,
+        spoiler_deg=spoiler_deg,
+        root_mc=root_mc,
+        root_te=root_te,
+        tip_mc=tip_mc,
+        tip_te=tip_te,
+        full_skin_uv=full_skin_uv,
+    )
+
     glPushAttrib(GL_TEXTURE_BIT | GL_ENABLE_BIT)
     if not full_skin_uv:
         glDisable(GL_TEXTURE_2D)
@@ -905,17 +1153,6 @@ def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_ski
     glEnd()
     glPopMatrix()
 
-    # Spoilers superiores de rolagem
-    spoiler_up = max(0.0, side * roll_input_deg * 1.2)
-    if spoiler_up > 0.5:
-        glColor3f(0.85, 0.86, 0.88) if full_skin_uv else glColor3f(0.52, 0.55, 0.60)
-        glPushMatrix()
-        glTranslatef(side * 1.85, 0.05, 0.42)
-        glRotatef(side * 14.0, 0.0, 1.0, 0.0)
-        glRotatef(spoiler_up, 1.0, 0.0, 0.0)
-        draw_surface_box(2.10, 0.02, 0.24, uv_scale=1.0, planar_uv=full_skin_uv)
-        glPopMatrix()
-
     # Luzes de navegação nas pontas das asas
     glPushAttrib(GL_LIGHTING_BIT | GL_TEXTURE_BIT | GL_ENABLE_BIT)
     glDisable(GL_LIGHTING)
@@ -934,6 +1171,60 @@ def draw_f14_wing_panel(side, wing_tex_id, sweep_angle, roll_input_deg, full_ski
 
 
 # ==============================================================================
+# LEMES DUPLOS E TAILERONS DIFERENCIAIS (PARTES MÓVEIS DE CAUDA)
+# ==============================================================================
+
+def draw_f14_twin_rudders(rudder_yaw_deg, use_custom_skin=False):
+    """
+    Renderiza os lemes verticais articulados nas derivas duplas (guinada).
+    Sinal aerodinâmico: guinada à esquerda (rudder_yaw > 0) deflete o bordo de fuga para a esquerda (-X).
+    """
+    glColor3f(0.92, 0.93, 0.95) if use_custom_skin else glColor3f(0.26, 0.28, 0.33)
+    for side in (-1.0, 1.0):
+        glPushMatrix()
+        glTranslatef(side * 0.94, 0.22, 3.55)
+        glRotatef(-side * 7.5, 0.0, 0.0, 1.0)
+        glTranslatef(0.0, 0.0, 0.96)
+        glRotatef(-rudder_yaw_deg, 0.0, 1.0, 0.0)
+        glBegin(GL_QUADS)
+        draw_surface_quad([0.03, 0.05, 0.0], [0.02, 0.05, 0.36], [0.015, 1.48, 0.46], [0.02, 1.48, 0.16], 0.6, planar_uv=use_custom_skin)
+        draw_surface_quad([-0.03, 0.05, 0.36], [-0.03, 0.05, 0.0], [-0.02, 1.48, 0.16], [-0.015, 1.48, 0.46], 0.6, planar_uv=use_custom_skin)
+        glEnd()
+        glPopMatrix()
+
+
+def draw_f14_tailerons(taileron_pitch_deg, taileron_roll_deg, use_custom_skin=False):
+    """
+    Renderiza os estabilizadores horizontais inteiriços diferenciais (Tailerons) do F-14,
+    responsáveis simultaneamente pela arfagem (simétricos) e pela rolagem (diferenciais).
+    Sinal aerodinâmico:
+      - Cabrar (+pitch): bordo de fuga (+Z) sobe -> rotação negativa em X.
+      - Rolar à direita (+roll): bordo de fuga direito sobe (-X) e esquerdo desce (+X),
+        atuando em sincronia física com os Wing Spoilers da asa que abaixa!
+    """
+    glColor3f(0.92, 0.93, 0.95) if use_custom_skin else glColor3f(0.58, 0.61, 0.66)
+    for side in (-1.0, 1.0):
+        glPushMatrix()
+        glTranslatef(side * 1.15, -0.06, 4.35)
+        deflection = -(taileron_pitch_deg + side * taileron_roll_deg)
+        glRotatef(deflection, 1.0, 0.0, 0.0)
+        glRotatef(-side * 3.0, 0.0, 0.0, 1.0)
+
+        span = side * 1.75
+        glBegin(GL_QUADS)
+        if side > 0:
+            draw_surface_quad([0.0, 0.03, -0.60], [0.0, 0.02, 0.78], [span, 0.01, 1.25], [span, 0.01, 0.38], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, -0.02, 0.78], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, -0.01, 1.25], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, -0.03, -0.60], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, -0.01, 0.38], 1.0, planar_uv=use_custom_skin)
+        else:
+            draw_surface_quad([0.0, 0.02, 0.78], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, 0.01, 1.25], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, -0.03, -0.60], [0.0, -0.02, 0.78], [span, -0.01, 1.25], [span, -0.01, 0.38], 1.0, planar_uv=use_custom_skin)
+            draw_surface_quad([0.0, 0.03, -0.60], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, 0.01, 0.38], 1.0, planar_uv=use_custom_skin)
+        glEnd()
+        glPopMatrix()
+
+
+# ==============================================================================
 # RENDERIZAÇÃO HIERÁRQUICA COMPLETA DO F-14 TOMCAT
 # ==============================================================================
 
@@ -946,7 +1237,13 @@ def draw_f14_complete(
     skinned_fuselage_dlist=None
 ):
     """
-    Renderiza o F-14 Tomcat completo aplicando transformações hierárquicas e a Skin ativa.
+    Renderiza o F-14 Tomcat completo aplicando transformações hierárquicas e a Skin ativa:
+      1. Fuselagem estática + cockpit + naceles + mísseis.
+      2. Trem de pouso retrátil.
+      3. Asas de geometria variável + 4 painéis de Wing Spoilers por asa (travados >= 57°).
+      4. Lemes verticais duplos (guinada).
+      5. Tailerons diferenciais (arfagem + rolagem).
+      6. Bocais das turbinas e pós-combustores (afterburners).
     """
     use_custom_skin = (
         skin_manager is not None
@@ -954,6 +1251,11 @@ def draw_f14_complete(
         and skin_manager.is_custom_skin_active()
     )
     active_tex_id = skin_manager.get_active_texture_id() if skin_manager is not None else wing_tex_id
+
+    spoiler_right_deg = getattr(aircraft, "spoiler_right_deg", 0.0)
+    spoiler_left_deg = getattr(aircraft, "spoiler_left_deg", 0.0)
+    taileron_pitch = getattr(aircraft, "taileron_pitch", aircraft.elevator_pitch)
+    taileron_roll = getattr(aircraft, "taileron_roll", aircraft.elevator_roll)
 
     glPushMatrix()
     glMultMatrixf(aircraft.get_model_matrix())
@@ -973,17 +1275,21 @@ def draw_f14_complete(
     # 2. Trem de Pouso Retrátil
     draw_retractable_landing_gear(aircraft.gear_deploy, aircraft.rudder_yaw)
 
-    # 3. Asas de Geometria Variável
+    # 3. Asas de Geometria Variável + Wing Spoilers (estibordo +1.0 / bombordo -1.0)
     glPushMatrix()
     glTranslatef(1.65, 0.06, 0.15)
     glRotatef(-aircraft.wing_sweep_angle, 0.0, 1.0, 0.0)
-    draw_f14_wing_panel(1.0, active_tex_id, aircraft.wing_sweep_angle, aircraft.elevator_roll, full_skin_uv=use_custom_skin)
+    draw_f14_wing_panel(
+        1.0, active_tex_id, aircraft.wing_sweep_angle, spoiler_right_deg, full_skin_uv=use_custom_skin
+    )
     glPopMatrix()
 
     glPushMatrix()
     glTranslatef(-1.65, 0.06, 0.15)
     glRotatef(aircraft.wing_sweep_angle, 0.0, 1.0, 0.0)
-    draw_f14_wing_panel(-1.0, active_tex_id, aircraft.wing_sweep_angle, aircraft.elevator_roll, full_skin_uv=use_custom_skin)
+    draw_f14_wing_panel(
+        -1.0, active_tex_id, aircraft.wing_sweep_angle, spoiler_left_deg, full_skin_uv=use_custom_skin
+    )
     glPopMatrix()
 
     glPushAttrib(GL_TEXTURE_BIT | GL_ENABLE_BIT)
@@ -992,41 +1298,11 @@ def draw_f14_complete(
     else:
         glDisable(GL_TEXTURE_2D)
 
-    # 4. Lemes Articulados nas Derivas Duplas (com UV métrico sem cisalhamento)
-    glColor3f(0.92, 0.93, 0.95) if use_custom_skin else glColor3f(0.26, 0.28, 0.33)
-    for side in (-1.0, 1.0):
-        glPushMatrix()
-        glTranslatef(side * 0.94, 0.22, 3.55)
-        glRotatef(-side * 7.5, 0.0, 0.0, 1.0)
-        glTranslatef(0.0, 0.0, 0.96)
-        glRotatef(aircraft.rudder_yaw, 0.0, 1.0, 0.0)
-        glBegin(GL_QUADS)
-        draw_surface_quad([0.03, 0.05, 0.0], [0.02, 0.05, 0.36], [0.015, 1.48, 0.46], [0.02, 1.48, 0.16], 0.6, planar_uv=use_custom_skin)
-        draw_surface_quad([-0.03, 0.05, 0.36], [-0.03, 0.05, 0.0], [-0.02, 1.48, 0.16], [-0.015, 1.48, 0.46], 0.6, planar_uv=use_custom_skin)
-        glEnd()
-        glPopMatrix()
+    # 4. Lemes Articulados nas Derivas Duplas (Guinada)
+    draw_f14_twin_rudders(aircraft.rudder_yaw, use_custom_skin=use_custom_skin)
 
-    # 5. Profundores Horizontais Móveis (Differential Tailerons - sem cisalhamento trapezoidal)
-    glColor3f(0.92, 0.93, 0.95) if use_custom_skin else glColor3f(0.58, 0.61, 0.66)
-    for side in (-1.0, 1.0):
-        glPushMatrix()
-        glTranslatef(side * 1.15, -0.06, 4.35)
-        deflection = aircraft.elevator_pitch + side * aircraft.elevator_roll
-        glRotatef(deflection, 1.0, 0.0, 0.0)
-        glRotatef(-side * 3.0, 0.0, 0.0, 1.0)
-
-        span = side * 1.75
-        glBegin(GL_QUADS)
-        if side > 0:
-            draw_surface_quad([0.0, 0.03, -0.60], [0.0, 0.02, 0.78], [span, 0.01, 1.25], [span, 0.01, 0.38], 1.0, planar_uv=use_custom_skin)
-            draw_surface_quad([0.0, -0.02, 0.78], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, -0.01, 1.25], 1.0, planar_uv=use_custom_skin)
-            draw_surface_quad([0.0, -0.03, -0.60], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, -0.01, 0.38], 1.0, planar_uv=use_custom_skin)
-        else:
-            draw_surface_quad([0.0, 0.02, 0.78], [0.0, 0.03, -0.60], [span, 0.01, 0.38], [span, 0.01, 1.25], 1.0, planar_uv=use_custom_skin)
-            draw_surface_quad([0.0, -0.03, -0.60], [0.0, -0.02, 0.78], [span, -0.01, 1.25], [span, -0.01, 0.38], 1.0, planar_uv=use_custom_skin)
-            draw_surface_quad([0.0, 0.03, -0.60], [0.0, -0.03, -0.60], [span, -0.01, 0.38], [span, 0.01, 0.38], 1.0, planar_uv=use_custom_skin)
-        glEnd()
-        glPopMatrix()
+    # 5. Estabilizadores Horizontais Diferenciais (Tailerons: Arfagem + Rolagem)
+    draw_f14_tailerons(taileron_pitch, taileron_roll, use_custom_skin=use_custom_skin)
 
     # 6. Bocais Cilíndricos das Turbinas e Pós-Combustão (Afterburners - sem textura de skin)
     glDisable(GL_TEXTURE_2D)
