@@ -53,6 +53,7 @@ from audio_config import (
     GROUND_ROLL_MIN_RATE,
     GROUND_ROLL_MAX_RATE,
     SCENE_AUDIO_MAP,
+    MENU_SFX_MAP,
     CLIP_CONFIG,
 )
 
@@ -870,6 +871,16 @@ class AudioManager:
         voice.target_gain = 1.0
         voice.fade_rate = 15.0
         voice.playing = True
+
+
+    def play_menu_sfx(self, action):
+        """
+        Toca o efeito sonoro de interface/menu correspondente à ação ('move', 'select' ou 'pause'),
+        usando o mapeamento configurável MENU_SFX_MAP em audio_config.py.
+        """
+        clip_name = MENU_SFX_MAP.get(action)
+        if clip_name:
+            self.play_sfx(clip_name, restart=True)
 
     def stop_sfx(self, name, fade_out_sec=0.12):
         """Interrompe um efeito sonoro com fade-out rápido para evitar clique."""

@@ -111,6 +111,20 @@ SCENE_AUDIO_MAP = {
     },
 }
 
+# ==============================================================================
+# 3.1 MAPEAMENTO RÁPIDO DOS SONS DE MENU (FÁCIL DE TROCAR PARA TESTES)
+# ==============================================================================
+# Basta alterar qual clip ('menu_1', 'menu_2' ou 'menu_3') toca em cada ação:
+#   - "move"  : mover entre opções ou ajustar sliders
+#   - "select": confirmar opção/botão com Enter/Espaço
+#   - "pause" : abrir ou fechar o menu de pause com ESC
+MENU_SFX_MAP = {
+    "move":   "menu_2",   # menu2.wav (0.08s, clique curto e percussivo)
+    "select": "menu_1",   # menu1.wav (0.89s, confirmação encorpada)
+    "pause":  "menu_3",   # menu3.wav (0.84s, transição suave/brilhante)
+}
+
+
 
 # ==============================================================================
 # 4. CATÁLOGO DE CLIPS DE ÁUDIO E TRATAMENTOS DE SINAL (RECORTES / FILTROS / OLA)
@@ -547,4 +561,34 @@ CLIP_CONFIG = {
         "loop": True, "volume": 0.75, "speed": 1.0,
         "optional": True,
     },
+
+    # --------------------------------------------------------------------------
+    # I. SONS DE INTERFACE E NAVEGAÇÃO DE MENU (assets/audio/menu/)
+    # Volumes calibrados pela análise espectral/RMS (analise_audio_2.md):
+    #   - menu1.wav: 0.888s, 48kHz Mono,   Peak   0.0 dBFS, RMS -16.6 dBFS -> vol 0.58
+    #   - menu2.wav: 0.078s, 44.1kHz Est., Peak  -4.0 dBFS, RMS -23.3 dBFS -> vol 0.72
+    #   - menu3.wav: 0.836s, 44.1kHz Est., Peak -10.1 dBFS, RMS -31.1 dBFS -> vol 1.15
+    # --------------------------------------------------------------------------
+    "menu_1": {
+        "path": "assets/audio/menu/menu1.wav",
+        "category": "sfx",
+        "start_sec": None, "end_sec": None,
+        "loop": False, "volume": 0.58, "speed": 1.0,
+        "fade_in_sec": 0.004, "fade_out_sec": 0.04,
+    },
+    "menu_2": {
+        "path": "assets/audio/menu/menu2.wav",
+        "category": "sfx",
+        "start_sec": None, "end_sec": None,
+        "loop": False, "volume": 0.72, "speed": 1.0,
+        "fade_in_sec": 0.002, "fade_out_sec": 0.01,
+    },
+    "menu_3": {
+        "path": "assets/audio/menu/menu3.wav",
+        "category": "sfx",
+        "start_sec": None, "end_sec": None,
+        "loop": False, "volume": 1.15, "speed": 1.0,
+        "fade_in_sec": 0.004, "fade_out_sec": 0.04,
+    },
+
 }

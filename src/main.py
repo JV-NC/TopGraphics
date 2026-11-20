@@ -11,7 +11,7 @@ Execução (a partir da raiz do repositório):
 
 # TODO: gamepad integration
 # TODO: implement key to cycle day/night states (sunrise, noon, sunset/night)
-# TODO: implement flaps sound and menu sound
+# TODO: implement flaps sound
 
 import sys
 import time
@@ -149,8 +149,10 @@ class TopGraphicsApp:
         # Atalhos padrão de jogo (quando ESTADO_JOGANDO)
         if self.ui.estado_atual == MenuUI.ESTADO_JOGANDO:
             if key == glfw.KEY_ESCAPE:
-                # Pausa o jogo e abre o menu de pause
+                # Pausa o jogo, abre o menu de pause e dispara som de abertura
+                self.ui.pause_idx = 0
                 self.ui.estado_atual = MenuUI.ESTADO_PAUSE
+                self.audio.play_menu_sfx("pause")
                 return
             elif key == glfw.KEY_1:
                 self.camera.set_mode(1, scene_mode=self.scene_mode)

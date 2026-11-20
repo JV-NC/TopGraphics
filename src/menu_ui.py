@@ -63,8 +63,13 @@ class MenuUI:
             audio_manager.set_category_volume("music", self.temp_volumes["music"])
             print("[Configurações] Volumes aplicados com sucesso!")
 
+    def _play_sfx(self, app, action):
+        """Dispara som de interface ('move', 'select' ou 'pause') via AudioManager."""
+        if getattr(app, "audio", None) is not None:
+            app.audio.play_menu_sfx(action)
+
     def handle_key(self, key, action, app):
-        """Trata a navegação por teclado nos menus, pause e configurações."""
+        """Trata a navegação por teclado nos menus, pause e configurações com feedback sonoro."""
         if action != 1:  # Apenas GLFW_PRESS
             return False
 
@@ -76,11 +81,14 @@ class MenuUI:
         if self.estado_atual == self.ESTADO_MENU:
             if key == glfw.KEY_UP or key == glfw.KEY_W:
                 self.menu_principal_idx = (self.menu_principal_idx - 1) % 5
+                self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_DOWN or key == glfw.KEY_S:
                 self.menu_principal_idx = (self.menu_principal_idx + 1) % 5
+                self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
+                self._play_sfx(app, "select")
                 if self.menu_principal_idx == 0:
                     # Iniciar Cena 1
                     app.switch_scene(1)
@@ -110,27 +118,33 @@ class MenuUI:
         elif self.estado_atual == self.ESTADO_PAUSE:
             if key == glfw.KEY_UP or key == glfw.KEY_W:
                 self.pause_idx = (self.pause_idx - 1) % 3
+                self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_DOWN or key == glfw.KEY_S:
                 self.pause_idx = (self.pause_idx + 1) % 3
+                self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
                 if self.pause_idx == 0:
-                    # Retomar / Resumir
+                    # Retomar / Resumir (fecha o menu de pause)
+                    self._play_sfx(app, "pause")
                     self.estado_atual = self.ESTADO_JOGANDO
                 elif self.pause_idx == 1:
                     # Abrir Configurações
+                    self._play_sfx(app, "select")
                     self.sync_volumes_from_manager(app.audio)
                     self.origem_config = self.ESTADO_PAUSE
                     self.config_idx = 0
                     self.estado_atual = self.ESTADO_CONFIG
                 elif self.pause_idx == 2:
                     # Voltar para o Menu Principal
+                    self._play_sfx(app, "select")
                     self.estado_atual = self.ESTADO_MENU
                     app.audio.set_music_context("music_menu_inspection")
                 return True
             elif key == glfw.KEY_ESCAPE:
                 # Atalho ESC para despausar diretamente
+                self._play_sfx(app, "pause")
                 self.estado_atual = self.ESTADO_JOGANDO
                 return True
 
@@ -142,31 +156,38 @@ class MenuUI:
 
             if key == glfw.KEY_UP or key == glfw.KEY_W:
                 self.config_idx = (self.config_idx - 1) % 6
+                self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_DOWN or key == glfw.KEY_S:
                 self.config_idx = (self.config_idx + 1) % 6
+                self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_LEFT or key == glfw.KEY_A:
                 if self.config_idx in keys_slider_map:
                     k = keys_slider_map[self.config_idx]
                     self.temp_volumes[k] = max(0.0, self.temp_volumes[k] - 0.05)
+                    self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_RIGHT or key == glfw.KEY_D:
                 if self.config_idx in keys_slider_map:
                     k = keys_slider_map[self.config_idx]
                     self.temp_volumes[k] = min(1.0, self.temp_volumes[k] + 0.05)
+                    self._play_sfx(app, "move")
                 return True
             elif key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
                 if self.config_idx == 4:
                     # Botão APLICAR: salva e sai para a origem (Menu ou Pause)
                     self.apply_volumes_to_manager(app.audio)
+                    self._play_sfx(app, "select")
                     self.estado_atual = self.origem_config
                 elif self.config_idx == 5:
                     # Botão VOLTAR: descarta alterações e retorna
+                    self._play_sfx(app, "select")
                     self.estado_atual = self.origem_config
                 return True
             elif key == glfw.KEY_ESCAPE:
                 # ESC nas configurações equivale a Voltar sem aplicar
+                self._play_sfx(app, "select")
                 self.estado_atual = self.origem_config
                 return True
 
@@ -178,6 +199,7 @@ class MenuUI:
                 # Abre o menu de pausa nas cenas 1, 2 ou 3
                 self.pause_idx = 0
                 self.estado_atual = self.ESTADO_PAUSE
+                self._play_sfx(app, "pause")
                 return True
 
         return False
