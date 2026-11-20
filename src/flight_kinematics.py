@@ -3,12 +3,14 @@
 TopGraphics | flight_kinematics.py
 Cinemática de voo 6-DOF sem Gimbal Lock (base ortonormal local F, U, R + Rodrigues),
 modo solo no convés, modo de inspeção estacionária (Cena 3), pós-combustor (afterburner),
-arrasto do trem de pouso, colisão com ondas físicas do oceano e mundo periódico ("Roundabout").
+arrasto do trem de pouso, wing spoilers de rolagem com travamento automático >= 57°,
+colisão com ondas físicas do oceano e mundo periódico ("Roundabout").
 ================================================================================
 """
 
 # TODO: implement maximum speeds and accelerations more consistent with the actual F-14 (1342 kt max)
 # TODO: check method to simulate/feel g-force on sharp turns
+# TODO: integrate flaps, automatic slats and split dorsal/ventral air brakes in kinematics refactor
 
 import math
 
@@ -48,6 +50,15 @@ GEAR_DRAG_SPEED_MULT = 0.58     # Reduz a velocidade máxima em até 42% com o t
 GEAR_DRAG_ACCEL_MULT = 0.50     # Reduz a aceleração em até 50% com o trem baixado
 GEAR_AIRBRAKE_DECEL = 3.2       # Frenagem aerodinâmica extra ao baixar o trem em alta velocidade
 
+# Constantes dos Wing Spoilers do F-14 Tomcat (auxílio de rolagem e redução de guinada adversa)
+SPOILER_LOCKOUT_SWEEP_DEG = 57.0   # Trava os spoilers rente à asa a partir de 57° de enflecamento
+SPOILER_MAX_DEFLECTION_DEG = 55.0  # Deflexão máxima para cima dos painéis de spoiler (F-14 real: ~55°)
+SPOILER_ACTUATION_RATE = 14.0      # Velocidade de resposta hidráulica dos painéis
+ROLL_RATE_TAILERON_ONLY = 1.95     # Taxa de rolagem apenas com tailerons diferenciais (>= 57°)
+ROLL_RATE_SPOILER_BOOST = 0.85     # Ganho adicional de rolagem com wing spoilers ativos (< 57°)
+SPOILER_PROVERSE_YAW = 0.14        # Assistência de guinada coordenada (reduz guinada adversa na curva)
+SPOILER_ROLL_DRAG_DECEL = 0.45     # Arrasto aerodinâmico sutil ao erguer os spoilers em rolagem
+
 
 def rodrigues_rotation(v, k, angle_rad):
     """
@@ -63,7 +74,8 @@ def rodrigues_rotation(v, k, angle_rad):
 class Aircraft:
     """
     Representa o caça F-14 Tomcat no espaço 3D com referencial ortonormal local (F, U, R),
-    estados de solo/porta-aviões, pós-combustor, trem de pouso retrátil e detecção de colisão.
+    estados de solo/porta-aviões, pós-combustor, trem de pouso retrátil, superfícies de
+    controle articuladas (tailerons diferenciais, lemes duplos e wing spoilers) e colisão.
     """
     def __init__(self):
         self.pos = np.array([0.0, CARRIER_DECK_Y + GEAR_HEIGHT_OFFSET, 95.0], dtype=np.float32)
@@ -91,12 +103,22 @@ class Aircraft:
         # Deslocamento de teleporte toroidal ocorrido no último frame (para sincronizar a Chase Cam)
         self.last_wrap_delta = np.zeros(3, dtype=np.float32)
 
-        # Parâmetros de transformações geométricas filhas
+        # Parâmetros de transformações geométricas filhas (asas, tailerons, lemes e wing spoilers)
         self.wing_sweep_angle = 20.0   # 20 graus (aberta) até 68 graus (fechada/supersônica)
         self.auto_wing_sweep = True
-        self.elevator_pitch = 0.0
-        self.elevator_roll = 0.0
+
+        # Tailerons diferenciais (arfagem + rolagem) e lemes verticais duplos (guinada)
+        self.taileron_pitch = 0.0
+        self.taileron_roll = 0.0
+        self.elevator_pitch = 0.0      # Alias retrocompatível para taileron_pitch
+        self.elevator_roll = 0.0       # Alias retrocompatível para taileron_roll
         self.rudder_yaw = 0.0
+
+        # Wing Spoilers de rolagem (4 painéis por asa; travados rente à asa em >= 57°)
+        self.spoilers_locked = False
+        self.spoiler_authority = 1.0   # Fator de autoridade aerodinâmica [0.0 .. 1.0]
+        self.spoiler_left_deg = 0.0    # Deflexão atual para cima na asa esquerda [0° .. 55°]
+        self.spoiler_right_deg = 0.0   # Deflexão atual para cima na asa direita  [0° .. 55°]
 
     def reset(self, scene_mode):
         """Reposiciona a aeronave no estado inicial do cenário selecionado (1, 2 ou 3)."""
@@ -110,6 +132,14 @@ class Aircraft:
         self.forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
         self.up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
         self.right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        self.taileron_pitch = 0.0
+        self.taileron_roll = 0.0
+        self.elevator_pitch = 0.0
+        self.elevator_roll = 0.0
+        self.rudder_yaw = 0.0
+        self.spoiler_left_deg = 0.0
+        self.spoiler_right_deg = 0.0
 
         if scene_mode == 1:
             # Cena 1: Começa pousado e totalmente parado na popa do convés do Porta-Aviões
@@ -139,7 +169,87 @@ class Aircraft:
             self.gear_deploy = 1.0
             self.wing_sweep_angle = 20.0
 
+        self.spoilers_locked = (self.wing_sweep_angle >= SPOILER_LOCKOUT_SWEEP_DEG)
+        self.spoiler_authority = self._compute_spoiler_authority()
         self.max_speed = self.get_effective_max_speed()
+
+    def _compute_spoiler_authority(self):
+        """
+        Retorna a autoridade aerodinâmica dos wing spoilers [0.0 .. 1.0] em função do
+        ângulo de enflecamento das asas:
+          - Para wing_sweep_angle >= 57°: travamento total (0.0).
+          - Para wing_sweep_angle < 57°: autoridade máxima em 20° (1.0), decaindo
+            suavemente até 0.65 próximo de 57° conforme o braço de alavanca encurta.
+        """
+        if self.wing_sweep_angle >= SPOILER_LOCKOUT_SWEEP_DEG:
+            return 0.0
+        sweep_frac = np.clip(
+            (self.wing_sweep_angle - 20.0) / max(1.0, (SPOILER_LOCKOUT_SWEEP_DEG - 20.0)),
+            0.0, 1.0
+        )
+        return float(1.0 - 0.35 * sweep_frac)
+
+    def _update_control_surfaces(self, dt, pitch_input, roll_input, yaw_input):
+        """
+        Atualiza as deflexões hidráulicas suaves de todas as superfícies móveis:
+          - Tailerons diferenciais (arfagem e rolagem)
+          - Lemes duplos (guinada)
+          - Wing Spoilers (deflexão assimétrica na asa que abaixa durante a rolagem,
+            com desativação e travamento automático rente à asa em >= 57°).
+        """
+        prev_locked = self.spoilers_locked
+        self.spoilers_locked = (self.wing_sweep_angle >= SPOILER_LOCKOUT_SWEEP_DEG)
+        self.spoiler_authority = self._compute_spoiler_authority()
+
+        if self.spoilers_locked != prev_locked:
+            estado = "TRAVADOS (Enflecamento >= 57°)" if self.spoilers_locked else "ATIVOS (< 57° - Auxílio de Rolagem)"
+            print(f"[Wing Spoilers] {estado}")
+
+        # Alvos de deflexão para tailerons e lemes
+        target_pitch = float(pitch_input) * 22.0
+        target_roll = float(roll_input) * 15.0
+        target_yaw = float(yaw_input) * 20.0
+
+        # Alvos de deflexão assimétrica dos wing spoilers:
+        #   - roll_input < 0 (rolar p/ esquerda -> asa esquerda abaixa) => spoiler esquerdo sobe
+        #   - roll_input > 0 (rolar p/ direita  -> asa direita abaixa)  => spoiler direito sobe
+        if self.spoilers_locked:
+            target_sp_left = 0.0
+            target_sp_right = 0.0
+        else:
+            target_sp_left = max(0.0, -float(roll_input)) * SPOILER_MAX_DEFLECTION_DEG
+            target_sp_right = max(0.0, float(roll_input)) * SPOILER_MAX_DEFLECTION_DEG
+
+        if dt > 1e-6:
+            surf_blend = min(1.0, 16.0 * dt)
+            sp_blend = min(1.0, SPOILER_ACTUATION_RATE * dt)
+
+            self.taileron_pitch += (target_pitch - self.taileron_pitch) * surf_blend
+            self.taileron_roll += (target_roll - self.taileron_roll) * surf_blend
+            self.rudder_yaw += (target_yaw - self.rudder_yaw) * surf_blend
+
+            self.spoiler_left_deg += (target_sp_left - self.spoiler_left_deg) * sp_blend
+            self.spoiler_right_deg += (target_sp_right - self.spoiler_right_deg) * sp_blend
+
+            if self.spoiler_left_deg < 0.05 and target_sp_left == 0.0:
+                self.spoiler_left_deg = 0.0
+            if self.spoiler_right_deg < 0.05 and target_sp_right == 0.0:
+                self.spoiler_right_deg = 0.0
+
+        # Mantém aliases retrocompatíveis sincronizados
+        self.elevator_pitch = self.taileron_pitch
+        self.elevator_roll = self.taileron_roll
+
+    def get_effective_roll_rate(self):
+        """
+        Calcula a taxa de rolagem efetiva (rad/s) combinando os tailerons diferenciais
+        com o auxílio dos wing spoilers quando destravados (< 57°).
+        """
+        if self.spoilers_locked:
+            return ROLL_RATE_TAILERON_ONLY
+        deployed_frac = max(self.spoiler_left_deg, self.spoiler_right_deg) / SPOILER_MAX_DEFLECTION_DEG
+        spoiler_boost = ROLL_RATE_SPOILER_BOOST * self.spoiler_authority * (0.35 + 0.65 * deployed_frac)
+        return ROLL_RATE_TAILERON_ONLY + spoiler_boost
 
     def toggle_gear(self):
         """Alterna o recolhimento/acionamento do trem de pouso (Tecla 'Q')."""
@@ -290,7 +400,7 @@ class Aircraft:
                     return
 
     def update(self, dt, pitch_input, roll_input, yaw_input, throttle_input, brake_active, scene_mode):
-        """Atualiza a cinemática de solo/voo/inspeção, teleporte Roundabout, afterburner, trem e colisões."""
+        """Atualiza a cinemática de solo/voo/inspeção, superfícies móveis, Roundabout e colisões."""
         self.last_wrap_delta = np.zeros(3, dtype=np.float32)
 
         if self.crashed:
@@ -313,9 +423,19 @@ class Aircraft:
             self.afterburner = False
             print("[Afterburner] Pós-combustor desarmado automaticamente (Throttle = 0%).")
 
-        # Calcula velocidade máxima e aceleração efetivas (considerando Afterburner e Arrasto do Trem)
+        # Enflecamento automático das asas do F-14 (20° aberta -> 68° fechada em regime supersônico)
+        if self.auto_wing_sweep:
+            speed_ratio = np.clip((self.speed - 35.0) / (MAX_SPEED_AB - 35.0), 0.0, 1.0)
+            target_sweep = 20.0 + 48.0 * speed_ratio
+            self.wing_sweep_angle += (target_sweep - self.wing_sweep_angle) * min(1.0, 5.0 * dt)
+
+        # Atualiza superfícies de controle (tailerons, lemes e wing spoilers com trava em >= 57°)
+        self._update_control_surfaces(dt, pitch_input, roll_input, yaw_input)
+
+        # Calcula velocidade máxima, aceleração e taxa de rolagem efetivas
         self.max_speed = self.get_effective_max_speed()
         accel_rate = self.get_effective_accel_rate()
+        effective_roll_rate = self.get_effective_roll_rate()
 
         # ======================================================================
         # MODO SOLO / PISTA DO PORTA-AVIÕES (Permite ficar parado com throttle 0)
@@ -359,13 +479,12 @@ class Aircraft:
             self.speed += (target_speed - self.speed) * min(1.0, accel_rate * dt)
 
             pitch_rate = 1.45
-            roll_rate = 2.60
             yaw_rate = 1.10
 
             if abs(pitch_input) > 1e-4:
                 self.pitch(pitch_input * pitch_rate * dt)
             if abs(roll_input) > 1e-4:
-                self.roll(roll_input * roll_rate * dt)
+                self.roll(roll_input * effective_roll_rate * dt)
             if abs(yaw_input) > 1e-4:
                 self.yaw(yaw_input * yaw_rate * dt)
 
@@ -377,21 +496,31 @@ class Aircraft:
         # ======================================================================
         else:
             target_speed = MIN_GLIDE_SPEED + self.throttle * (self.max_speed - MIN_GLIDE_SPEED)
+            spoiler_total_frac = (self.spoiler_left_deg + self.spoiler_right_deg) / SPOILER_MAX_DEFLECTION_DEG
+            spoiler_drag = SPOILER_ROLL_DRAG_DECEL * spoiler_total_frac
 
             if self.speed > target_speed:
-                drag_decel = 1.8 + GEAR_AIRBRAKE_DECEL * self.gear_deploy
+                drag_decel = 1.8 + GEAR_AIRBRAKE_DECEL * self.gear_deploy + spoiler_drag
                 self.speed += (target_speed - self.speed) * min(1.0, drag_decel * dt)
             else:
-                self.speed += (target_speed - self.speed) * min(1.0, accel_rate * dt)
+                eff_accel = max(0.25, accel_rate - spoiler_drag * 0.5)
+                self.speed += (target_speed - self.speed) * min(1.0, eff_accel * dt)
 
             pitch_rate = 1.45
-            roll_rate = 2.60
             yaw_rate = 0.85
 
             if abs(pitch_input) > 1e-4:
                 self.pitch(pitch_input * pitch_rate * dt)
             if abs(roll_input) > 1e-4:
-                self.roll(roll_input * roll_rate * dt)
+                self.roll(roll_input * effective_roll_rate * dt)
+
+                # Wing spoilers criam arrasto assimétrico na asa que abaixa, reduzindo
+                # guinada adversa e ajudando a puxar o nariz suavemente para dentro da curva
+                if not self.spoilers_locked and abs(yaw_input) < 1e-4:
+                    active_sp_frac = max(self.spoiler_left_deg, self.spoiler_right_deg) / SPOILER_MAX_DEFLECTION_DEG
+                    # roll_input > 0 (direita) -> yaw negativo (nariz p/ direita)
+                    self.yaw(-roll_input * SPOILER_PROVERSE_YAW * self.spoiler_authority * active_sp_frac * dt)
+
             if abs(yaw_input) > 1e-4:
                 self.yaw(yaw_input * yaw_rate * dt)
 
@@ -407,17 +536,6 @@ class Aircraft:
             self.last_wrap_delta = wrap_position_roundabout(self.pos, scene_mode)
             if abs(self.last_wrap_delta[0]) > 1e-3 or abs(self.last_wrap_delta[2]) > 1e-3:
                 prev_pos += self.last_wrap_delta
-
-        # Enflecamento automático das asas do F-14 (20° aberta -> 68° fechada em regime supersônico)
-        if self.auto_wing_sweep:
-            speed_ratio = np.clip((self.speed - 35.0) / (MAX_SPEED_AB - 35.0), 0.0, 1.0)
-            target_sweep = 20.0 + 48.0 * speed_ratio
-            self.wing_sweep_angle += (target_sweep - self.wing_sweep_angle) * min(1.0, 5.0 * dt)
-
-        # Deflexão visual das superfícies de controle (profundores e lemes)
-        self.elevator_pitch = pitch_input * 22.0
-        self.elevator_roll = roll_input * 15.0
-        self.rudder_yaw = yaw_input * 20.0
 
         # Checa colisões com o porta-aviões, ondas físicas do oceano ou rochas do cânion
         self.check_collisions(prev_pos, scene_mode)
