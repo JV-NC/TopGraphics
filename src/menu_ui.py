@@ -90,16 +90,16 @@ class MenuUI:
             elif key == glfw.KEY_ENTER or key == glfw.KEY_SPACE:
                 self._play_sfx(app, "select")
                 if self.menu_principal_idx == 0:
-                    # Iniciar Cena 1
-                    app.switch_scene(1)
+                    # Iniciar Cena 1 (sempre reinicia e ativa áudio/ambiente da Cena 1)
+                    app.switch_scene(1, force_reset=True)
                     self.estado_atual = self.ESTADO_JOGANDO
                 elif self.menu_principal_idx == 1:
-                    # Iniciar Cena 2
-                    app.switch_scene(2)
+                    # Iniciar Cena 2 (sempre reinicia e ativa áudio/ambiente da Cena 2)
+                    app.switch_scene(2, force_reset=True)
                     self.estado_atual = self.ESTADO_JOGANDO
                 elif self.menu_principal_idx == 2:
                     # Iniciar Cena 3 (Inspeção)
-                    app.switch_scene(3)
+                    app.switch_scene(3, force_reset=True)
                     self.estado_atual = self.ESTADO_JOGANDO
                 elif self.menu_principal_idx == 3:
                     # Ir para Configurações
@@ -137,10 +137,10 @@ class MenuUI:
                     self.config_idx = 0
                     self.estado_atual = self.ESTADO_CONFIG
                 elif self.pause_idx == 2:
-                    # Voltar para o Menu Principal
+                    # Voltar para o Menu Principal (alterna áudio para contexto 'menu')
                     self._play_sfx(app, "select")
                     self.estado_atual = self.ESTADO_MENU
-                    app.audio.set_music_context("music_menu_inspection")
+                    app.audio.set_scene("menu")
                 return True
             elif key == glfw.KEY_ESCAPE:
                 # Atalho ESC para despausar diretamente

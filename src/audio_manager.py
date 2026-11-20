@@ -676,9 +676,18 @@ class AudioManager:
         target_music = scene_cfg.get("music")
         self.set_music_context(target_music)
 
-        # 3. Se entrou na Cena 3 (Inspeção), silencia suavemente motores e rolagem de solo
+        # 3. Se entrou no Menu ou Cena 3 (Inspeção), silencia suavemente motores e rolagem de solo
         if not scene_cfg.get("engines_active", False):
             self._fade_out_flight_loops()
+
+    def sync_aircraft_state(self, on_ground, throttle, crashed=False):
+        """
+        Sincroniza o estado anterior da aeronave após reset/troca de cenário para evitar
+        disparo falso de 'touchdown' ou 'engine_comb_start' no primeiro frame do spawn.
+        """
+        self._prev_on_ground = bool(on_ground)
+        self._prev_throttle = float(throttle)
+        self._prev_crashed = bool(crashed)
 
     def set_music_context(self, music_clip_name):
         """Alterna a trilha musical ativa com crossfade suave, sem reiniciar se já for a mesma."""
@@ -729,6 +738,7 @@ class AudioManager:
         on_ground=False,
         crash_type="solid",
         crash_reason="",
+        paused=False,
     ):
         """
         Atualiza em tempo real os ganhos dos segmentos de motor (JET_WHINE, COMBUSTION,
@@ -738,8 +748,14 @@ class AudioManager:
         if not self._running:
             return
 
-        # 1. Na Cena 3 (Inspeção), motores de voo e rolagem permanecem desligados
-        if self.scene_mode == 3:
+        # 0. Quando pausado (Pause/Config), silencia suavemente loops de voo sem perder o estado anterior
+        if paused:
+            self._fade_out_flight_loops()
+            return
+
+        # 1. No Menu Principal ou na Cena 3 (Inspeção), motores de voo e rolagem permanecem desligados
+        scene_cfg = SCENE_AUDIO_MAP.get(self.scene_mode, SCENE_AUDIO_MAP[3])
+        if not scene_cfg.get("engines_active", False):
             self._fade_out_flight_loops()
             self._prev_on_ground = on_ground
             self._prev_crashed = crashed

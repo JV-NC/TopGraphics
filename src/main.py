@@ -98,9 +98,10 @@ class TopGraphicsApp:
 
         self.skin_manager = None
 
-        # Sistema de Áudio independente (sounddevice + soundfile + NumPy)
+        # Sistema de Áudio independente (inicia no contexto 'menu' quando aberto pelo Menu Principal)
+        initial_audio_scene = self.scene_mode if self.has_cli_scene else "menu"
         self.audio = AudioManager(
-            initial_scene=self.scene_mode,
+            initial_scene=initial_audio_scene,
             initial_camera_mode=self.camera.mode
         )
 
@@ -108,17 +109,21 @@ class TopGraphicsApp:
         self.ui = MenuUI()
         if self.has_cli_scene:
             self.ui.estado_atual = MenuUI.ESTADO_JOGANDO
-            self.audio.set_music_context("music_flight")
+            self.audio.sync_aircraft_state(self.player.on_ground, self.player.throttle, self.player.crashed)
         else:
             self.ui.estado_atual = MenuUI.ESTADO_MENU
-            self.audio.set_music_context("music_menu_inspection")
 
-    def switch_scene(self, target_scene):
+    def switch_scene(self, target_scene, force_reset=False):
         """
         Alterna diretamente para o cenário desejado (1, 2 ou 3).
-        Não reinicia o mapa nem a aeronave caso o jogador já esteja no cenário solicitado.
+        - Quando chamado em voo via F1/F2/F3 (force_reset=False): não reinicia se já estiver no mapa atual.
+        - Quando chamado pelo Menu Principal (force_reset=True): sempre reinicia a cena e sincroniza o áudio.
         """
-        if target_scene == self.scene_mode:
+        if (not force_reset) and target_scene == self.scene_mode:
+            # Garante sincronismo de áudio caso estivesse fora de fase, sem reiniciar a aeronave
+            if self.audio.scene_mode != self.scene_mode:
+                self.audio.set_camera_mode(self.camera.mode)
+                self.audio.set_scene(self.scene_mode, force_init=True)
             print(f"[Cenário] Você já está na {self.SCENE_NAMES[self.scene_mode]} (sem reiniciar).")
             return
 
@@ -132,7 +137,8 @@ class TopGraphicsApp:
             self.camera.snap_chase_to(self.player)
 
         self.audio.set_camera_mode(self.camera.mode)
-        self.audio.set_scene(self.scene_mode)
+        self.audio.sync_aircraft_state(self.player.on_ground, self.player.throttle, self.player.crashed)
+        self.audio.set_scene(self.scene_mode, force_init=True)
         print(f"[Cenário] Alternado para {self.SCENE_NAMES[self.scene_mode]}")
 
     def key_callback(self, window, key, scancode, action, mods):
@@ -202,6 +208,7 @@ class TopGraphicsApp:
                 else:
                     self.camera.snap_chase_to(self.player)
                 self.audio.set_camera_mode(self.camera.mode)
+                self.audio.sync_aircraft_state(self.player.on_ground, self.player.throttle, self.player.crashed)
                 print("[Voo] Posição e atitude do F-14 reiniciadas.")
             elif key == glfw.KEY_L:
                 self.lighting_enabled = not self.lighting_enabled
@@ -319,7 +326,7 @@ class TopGraphicsApp:
                 if self.ui.estado_atual == MenuUI.ESTADO_MENU:
                     glClearColor(0.02, 0.05, 0.09, 1.0)
                     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-                    self.audio.set_scene(3)  # Garante música de menu/inspeção e motores desligados
+                    self.audio.set_scene("menu")  # Garante música de menu/inspeção e motores desligados
                     self.audio.update(dt=0.0, throttle=0.0, afterburner=False, crashed=False, aircraft_speed=0.0, on_ground=True)
                     self.ui.draw(width, height)
                     glfw.swap_buffers(window)
@@ -361,17 +368,18 @@ class TopGraphicsApp:
                 if self.scene_mode == 1:
                     update_ocean_physics(simulation_dt, self.player, sim_time)
 
-                # Sincroniza o áudio (pausado se pause/config)
+                # Sincroniza o áudio (pausado suavemente se pause/config)
                 audio_dt = 0.0 if is_paused else dt
                 self.audio.update(
                     dt=audio_dt,
-                    throttle=self.player.throttle if not is_paused else 0.0,
-                    afterburner=self.player.afterburner if not is_paused else False,
+                    throttle=self.player.throttle,
+                    afterburner=self.player.afterburner,
                     crashed=self.player.crashed,
                     aircraft_speed=self.player.speed,
                     on_ground=self.player.on_ground,
                     crash_type=getattr(self.player, "crash_type", "solid"),
                     crash_reason=self.player.crash_reason,
+                    paused=is_paused,
                 )
 
                 if self.scene_mode == 3:
