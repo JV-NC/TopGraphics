@@ -11,6 +11,8 @@ colisão com ondas físicas do oceano e mundo periódico ("Roundabout").
 # TODO: implement maximum speeds and accelerations more consistent with the actual F-14 (1342 kt max)
 # TODO: check method to simulate/feel g-force on sharp turns
 # TODO: integrate flaps, automatic slats and split dorsal/ventral air brakes in kinematics refactor
+# TODO: 'simulate' aerodynamic lift(ex: when the plane is stalling and facing up above the critical
+# attack angle, the plane should fall or rotate instead of going up, like in the current simulator)
 
 import math
 
