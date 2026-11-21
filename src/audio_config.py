@@ -529,6 +529,16 @@ CLIP_CONFIG = {
         "fade_in_sec": 0.03, "fade_out_sec": 0.06,
     },
 
+    # Atuador hidráulico dos Split Air Brakes (reaproveita FLAPS.wav com canal independente e pitch 1.18x
+    # para diferenciar sutilmente o atuador menor do Beaver Tail e permitir uso simultâneo com os flaps)
+    "airbrake": {
+        "path": "assets/audio/aircraft/events/FLAPS.wav",
+        "category": "sfx",
+        "start_sec": 0.12, "end_sec": 3.45,
+        "loop": True, "volume": 0.36, "speed": 1.18,
+        "fade_in_sec": 0.025, "fade_out_sec": 0.05,
+    },
+
     # --------------------------------------------------------------------------
     # G. SONS AMBIENTES (APENAS CENAS 1 E 2; CENA 3 E MENU NÃO TÊM SOM AMBIENTE)
     # Carrega janela estável de 45s com decimação direta (96kHz/192kHz -> 44.1kHz)

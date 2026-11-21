@@ -71,7 +71,7 @@ GEAR_DRAG_ACCEL_MULT = 0.55        # Reduz a aceleração em até 45% com o trem
 GEAR_AIRBRAKE_DECEL = 2.8          # Frenagem aerodinâmica extra do trem baixado
 
 # Split Dorsal & Ventral Air Brakes no Beaver Tail (Tecla 'B')
-AIRBRAKE_ACTUATION_RATE = 4.8      # Velocidade de abertura/fechamento hidráulico (~0.5s)
+AIRBRAKE_ACTUATION_RATE = 1.65     # Velocidade linear hidráulica (~0.60s, sincronizada com SFX)
 AIRBRAKE_DRAG_DECEL = 3.0          # Forte frenagem aerodinâmica com speedbrakes abertos
 AIRBRAKE_SPEED_MULT = 0.72         # Limita a velocidade máxima efetiva em até 28% enquanto aberto
 
@@ -177,6 +177,7 @@ class Aircraft:
         # Split Dorsal & Ventral Air Brakes no Beaver Tail (Tecla 'B')
         self.airbrake_deployed = False
         self.airbrake_deploy = 0.0     # 0.0 (fechados) a 1.0 (totalmente abertos)
+        self.airbrake_moving = False
 
     def reset(self, scene_mode):
         """Reposiciona a aeronave no estado inicial do cenário selecionado (1, 2 ou 3)."""
@@ -201,6 +202,7 @@ class Aircraft:
 
         self.airbrake_deployed = False
         self.airbrake_deploy = 0.0
+        self.airbrake_moving = False
         self.flaps_moving = False
         self.g_load = 1.0
         self.aoa_deg = 0.0
@@ -450,10 +452,15 @@ class Aircraft:
                 self.flaps_deploy = target_flaps
                 self.flaps_moving = False
 
-            # Atuação hidráulica dos Air Brakes e Slats
-            self.airbrake_deploy += (target_airbrake - self.airbrake_deploy) * min(1.0, AIRBRAKE_ACTUATION_RATE * dt)
-            if abs(self.airbrake_deploy - target_airbrake) < 0.005:
+            # Atuação hidráulica linear dos Split Air Brakes (sincronizada com o som hidráulico)
+            ab_delta = target_airbrake - self.airbrake_deploy
+            max_ab_step = AIRBRAKE_ACTUATION_RATE * dt
+            if abs(ab_delta) > 0.008:
+                self.airbrake_deploy += float(np.clip(ab_delta, -max_ab_step, max_ab_step))
+                self.airbrake_moving = True
+            else:
                 self.airbrake_deploy = target_airbrake
+                self.airbrake_moving = False
 
             self.slat_deploy += (target_slats - self.slat_deploy) * min(1.0, SLAT_ACTUATION_RATE * dt)
 
@@ -474,6 +481,7 @@ class Aircraft:
                 self.spoiler_right_deg = 0.0
         else:
             self.flaps_moving = False
+            self.airbrake_moving = False
 
         # Mantém aliases retrocompatíveis sincronizados
         self.elevator_pitch = self.taileron_pitch
@@ -497,6 +505,7 @@ class Aircraft:
             self.throttle = 0.0
             self.afterburner = False
             self.flaps_moving = False
+            self.airbrake_moving = False
             self.is_stalling = False
             self.g_load = 1.0
             print(f"\n[GAME OVER] {reason} Reiniciando em 2 segundos (ou pressione 'R')...\n")
@@ -613,6 +622,7 @@ class Aircraft:
 
         if dt <= 1e-6:
             self.flaps_moving = False
+            self.airbrake_moving = False
             return
 
         prev_pos = self.pos.copy()

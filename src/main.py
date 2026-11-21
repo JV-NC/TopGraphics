@@ -478,7 +478,9 @@ class TopGraphicsApp:
                 self.gamepad.poll()
 
                 # Se estiver em Menu Principal, Pause ou Configurações, repassa navegação do Gamepad à UI
-                if self.ui.estado_atual in (MenuUI.ESTADO_MENU, MenuUI.ESTADO_PAUSE, MenuUI.ESTADO_CONFIG):
+                # e impede que o mesmo clique (ex: A=Confirmar ou B=Voltar) dispare ação de voo no mesmo frame!
+                ui_was_open = self.ui.estado_atual in (MenuUI.ESTADO_MENU, MenuUI.ESTADO_PAUSE, MenuUI.ESTADO_CONFIG)
+                if ui_was_open:
                     for gp_key in self.gamepad.get_menu_key_events(dt):
                         self.ui.handle_key(gp_key, glfw.PRESS, self)
 
@@ -511,7 +513,7 @@ class TopGraphicsApp:
                 throttle_in = 0.0
                 brake_active = False
 
-                if not is_paused:
+                if (not is_paused) and (not ui_was_open):
                     # Botões discretos do Gamepad em jogo (A/B/X/Y/LS/RS/START/BACK/D-Pad)
                     self.handle_gamepad_gameplay_buttons()
                     # Reavalia pause caso START tenha sido pressionado neste frame
@@ -574,6 +576,7 @@ class TopGraphicsApp:
                     crash_reason=self.player.crash_reason,
                     paused=is_paused,
                     flaps_moving=getattr(self.player, "flaps_moving", False),
+                    airbrake_moving=getattr(self.player, "airbrake_moving", False),
                 )
 
                 sun_state = None

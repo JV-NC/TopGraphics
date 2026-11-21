@@ -718,30 +718,41 @@ class AudioManager:
         self.camera_mode = camera_mode
 
     def _fade_out_flight_loops(self, include_flaps=False):
-        """Coloca todos os loops de motor, afterburner e solo em rampa de fade-out."""
+        """Coloca todos os loops de motor, afterburner, solo (e hidráulicos se solicitado) em fade-out."""
         for name, voice in self.voices.items():
-            if voice.category == "engine" or name == "ground_roll" or (include_flaps and name == "flaps"):
+            if (
+                voice.category == "engine"
+                or name == "ground_roll"
+                or (include_flaps and name in ("flaps", "airbrake"))
+            ):
                 voice.fade_rate = 4.5
                 voice.target_gain = 0.0
 
-    def update_flaps_sfx(self, moving):
+    def _update_hydraulic_loop_sfx(self, clip_name, moving):
         """
-        Mantém o som hidráulico 'flaps' (FLAPS.wav) ativo exatamente enquanto os flaps
-        estiverem em deslocamento, aplicando fade-out suave (~0.11s) ao parar.
-        Funciona tanto em voo/solo quanto na Cena 3 de Inspeção.
+        Mantém um som hidráulico contínuo ('flaps' ou 'airbrake') ativo exatamente
+        enquanto a superfície móvel estiver em deslocamento, com fade-out suave ao parar.
         """
-        if not self._running or "flaps" not in self.voices:
+        if not self._running or clip_name not in self.voices:
             return
-        v_flaps = self.voices["flaps"]
+        voice = self.voices[clip_name]
         if moving:
-            if not v_flaps.playing or v_flaps.current_gain <= 1e-3:
-                v_flaps.cursor = float(v_flaps.loop_start)
-            v_flaps.playing = True
-            v_flaps.fade_rate = 14.0
-            v_flaps.target_gain = 1.0
+            if not voice.playing or voice.current_gain <= 1e-3:
+                voice.cursor = float(voice.loop_start)
+            voice.playing = True
+            voice.fade_rate = 16.0
+            voice.target_gain = 1.0
         else:
-            v_flaps.fade_rate = 9.0
-            v_flaps.target_gain = 0.0
+            voice.fade_rate = 10.0
+            voice.target_gain = 0.0
+
+    def update_flaps_sfx(self, moving):
+        """Mantém o som hidráulico 'flaps' (FLAPS.wav) sincronizado à movimentação dos flaps."""
+        self._update_hydraulic_loop_sfx("flaps", moving)
+
+    def update_airbrake_sfx(self, moving):
+        """Mantém o som hidráulico 'airbrake' (FLAPS.wav em 1.18x) sincronizado aos Split Air Brakes."""
+        self._update_hydraulic_loop_sfx("airbrake", moving)
 
     # --------------------------------------------------------------------------
     # ATUALIZAÇÃO CONTÍNUA POR FRAME (CHAMADA NO LOOP DO MAIN.PY)
@@ -759,6 +770,7 @@ class AudioManager:
         crash_reason="",
         paused=False,
         flaps_moving=False,
+        airbrake_moving=False,
     ):
         """
         Atualiza em tempo real os ganhos dos segmentos de motor (JET_WHINE, COMBUSTION,
@@ -773,8 +785,10 @@ class AudioManager:
             self._fade_out_flight_loops(include_flaps=True)
             return
 
-        # Atualiza o som contínuo dos flaps (funciona em voo, convés e também na Cena 3 de Inspeção)
-        self.update_flaps_sfx(bool(flaps_moving) and not crashed and self.scene_mode != "menu")
+        # Atualiza os sons hidráulicos de Flaps e Air Brakes (funcionam em voo, convés e na Cena 3)
+        allow_hydraulics = (not crashed) and (self.scene_mode != "menu")
+        self.update_flaps_sfx(bool(flaps_moving) and allow_hydraulics)
+        self.update_airbrake_sfx(bool(airbrake_moving) and allow_hydraulics)
 
         # 1. No Menu Principal ou na Cena 3 (Inspeção), motores de voo e rolagem permanecem desligados
         scene_cfg = SCENE_AUDIO_MAP.get(self.scene_mode, SCENE_AUDIO_MAP[3])
