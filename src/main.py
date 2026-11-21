@@ -9,7 +9,6 @@ Execução (a partir da raiz do repositório):
 ================================================================================
 """
 
-# TODO: gamepad integration
 
 import sys
 import time
@@ -25,6 +24,12 @@ except ImportError as e:
 
 from flight_kinematics import Aircraft
 from camera import CameraController
+from gamepad_controller import (
+    GamepadController,
+    BTN_A, BTN_B, BTN_X, BTN_Y,
+    BTN_LS, BTN_RS, BTN_START, BTN_BACK,
+    BTN_DPAD_UP, BTN_DPAD_DOWN, BTN_DPAD_LEFT, BTN_DPAD_RIGHT,
+)
 from f14_model import (
     create_wing_insignia_texture,
     build_f14_static_fuselage_list,
@@ -116,6 +121,9 @@ class TopGraphicsApp:
             initial_camera_mode=self.camera.mode
         )
 
+        # Sistema de Controle / Gamepad (Detecção nativa do SO padrão XBOX via GLFW)
+        self.gamepad = GamepadController()
+
         # Sistema de Interface (Menu Principal, Pause, Configurações)
         self.ui = MenuUI()
         if self.has_cli_scene:
@@ -161,6 +169,112 @@ class TopGraphicsApp:
         hh = int(self.time_of_day_hours)
         mm = int((self.time_of_day_hours - hh) * 60.0)
         print(f"[Ciclo Dia/Noite] Horário alterado para {preset['label']} ({hh:02d}:{mm:02d})")
+
+    def cycle_camera_mode(self):
+        """Alterna ciclicamente entre as câmeras (1 -> 2 -> 3 -> 1) sincronizando o áudio."""
+        if self.scene_mode == 3:
+            self.camera.set_mode(3, scene_mode=3)
+            self.audio.set_camera_mode(self.camera.mode)
+            return
+        next_cam = (self.camera.mode % 3) + 1
+        self.camera.set_mode(next_cam, scene_mode=self.scene_mode)
+        self.audio.set_camera_mode(self.camera.mode)
+
+    def cycle_scene_mode(self):
+        """Alterna ciclicamente entre os cenários (1 -> 2 -> 3 -> 1)."""
+        next_scene = (self.scene_mode % 3) + 1
+        self.switch_scene(next_scene)
+
+    def toggle_wing_sweep_mode(self):
+        """Alterna enflecamento das asas entre AUTOMÁTICO e MANUAL (20° <-> 68°)."""
+        self.player.auto_wing_sweep = not self.player.auto_wing_sweep
+        if not self.player.auto_wing_sweep:
+            self.player.wing_sweep_angle = 68.0 if self.player.wing_sweep_angle < 45.0 else 20.0
+        estado = "AUTOMÁTICO" if self.player.auto_wing_sweep else f"MANUAL ({self.player.wing_sweep_angle:.0f}°)"
+        print(f"Enflecamento das Asas do F-14: {estado}")
+
+    def handle_gamepad_gameplay_buttons(self):
+        """
+        Processa os botões discretos (borda de subida) do Gamepad padrão XBOX
+        enquanto o simulador está no estado ESTADO_JOGANDO:
+          - A       : Toggle Trem de Pouso
+          - B       : Toggle Air Brake
+          - X       : Toggle Afterburner
+          - Y       : Alternar Cenas (1 -> 2 -> 3)
+          - LS      : Toggle Flaps
+          - RS      : Alternar Câmera (1 -> 2 -> 3)
+          - START   : Abrir Menu de Pause
+          - BACK    : Reiniciar Aeronave
+          - D-Pad   : Dia/Noite, Asas, HUD, Ciclo Solar (Voo) | Skins, Paleta, HUD, Asas (Cena 3)
+        """
+        gp = self.gamepad
+        if not gp.connected:
+            return
+
+        if gp.just_pressed(BTN_START):
+            self.ui.pause_idx = 0
+            self.ui.estado_atual = MenuUI.ESTADO_PAUSE
+            self.audio.play_menu_sfx("pause")
+            return
+
+        if gp.just_pressed(BTN_A):
+            prev_gear = self.player.gear_down
+            self.player.toggle_gear()
+            if self.player.gear_down != prev_gear:
+                self.audio.play_gear_sfx(deploying=self.player.gear_down)
+
+        if gp.just_pressed(BTN_B):
+            self.player.toggle_airbrake()
+
+        if gp.just_pressed(BTN_X):
+            self.player.toggle_afterburner()
+
+        if gp.just_pressed(BTN_Y):
+            self.cycle_scene_mode()
+
+        if gp.just_pressed(BTN_LS):
+            self.player.toggle_flaps()
+
+        if gp.just_pressed(BTN_RS):
+            self.cycle_camera_mode()
+
+        if gp.just_pressed(BTN_BACK):
+            self.player.reset(self.scene_mode)
+            reset_canyon_dust()
+            if self.scene_mode == 3:
+                self.camera.set_mode(3, scene_mode=3)
+            else:
+                self.camera.snap_chase_to(self.player)
+            self.audio.set_camera_mode(self.camera.mode)
+            self.audio.sync_aircraft_state(self.player.on_ground, self.player.throttle, self.player.crashed)
+            print("[Voo] Posição e atitude do F-14 reiniciadas (Gamepad BACK).")
+
+        # D-Pad contextual: Voo (Cenas 1/2) vs Inspeção/Skins (Cena 3)
+        if gp.just_pressed(BTN_DPAD_UP):
+            if self.scene_mode == 3:
+                if self.skin_manager is not None:
+                    self.skin_manager.next_pattern(scene_mode=self.scene_mode)
+            else:
+                self.cycle_time_of_day()
+
+        if gp.just_pressed(BTN_DPAD_DOWN):
+            if self.scene_mode == 3:
+                if self.skin_manager is not None:
+                    self.skin_manager.next_palette(scene_mode=self.scene_mode)
+            else:
+                self.toggle_wing_sweep_mode()
+
+        if gp.just_pressed(BTN_DPAD_LEFT):
+            self.hud_enabled = not self.hud_enabled
+            print(f"[HUD] Interface Tática: {'ATIVADA' if self.hud_enabled else 'OCULTA'}")
+
+        if gp.just_pressed(BTN_DPAD_RIGHT):
+            if self.scene_mode == 3:
+                self.toggle_wing_sweep_mode()
+            else:
+                self.day_cycle_paused = not self.day_cycle_paused
+                estado = "FIXO (PAUSADO)" if self.day_cycle_paused else "AUTOMÁTICO (CONTÍNUO)"
+                print(f"[Ciclo Dia/Noite] Progressão Solar: {estado}")
 
     def key_callback(self, window, key, scancode, action, mods):
         """Trata atalhos de teclado, redirecionando para a UI quando em menus ou pause."""
@@ -257,11 +371,7 @@ class TopGraphicsApp:
                 glPolygonMode(GL_FRONT_AND_BACK, GL_LINE if self.wireframe_mode else GL_FILL)
                 print(f"[Malha 3D] Modo Wireframe: {'ATIVADO' if self.wireframe_mode else 'DESATIVADO'}")
             elif key == glfw.KEY_G:
-                self.player.auto_wing_sweep = not self.player.auto_wing_sweep
-                if not self.player.auto_wing_sweep:
-                    self.player.wing_sweep_angle = 68.0 if self.player.wing_sweep_angle < 45.0 else 20.0
-                estado = "AUTOMÁTICO" if self.player.auto_wing_sweep else f"MANUAL ({self.player.wing_sweep_angle:.0f}°)"
-                print(f"Enflecamento das Asas do F-14: {estado}")
+                self.toggle_wing_sweep_mode()
 
     def mouse_button_callback(self, window, button, action, mods):
         if button == glfw.MOUSE_BUTTON_LEFT:
@@ -346,6 +456,16 @@ class TopGraphicsApp:
         print(" [L / T / Z]           : Ligar/Desligar Luzes (L), Texturas (T), Wireframe (Z)")
         print(" [R]                   : Reiniciar Posição/Atitude do Caça imediatamente")
         print(" [ESC]                 : Sair")
+        print("-" * 78)
+        print(" GAMEPAD (PADRÃO XBOX — DETECÇÃO AUTOMÁTICA DO SO VIA GLFW):")
+        print("   LS (Y / X)          : Arfagem (Pitch) / Rolagem (Roll)")
+        print("   LT / RT             : Reduzir Throttle (+ Freio no Convés) / Aumentar Throttle")
+        print("   LB / RB             : Guinada Esquerda / Guinada Direita")
+        print("   A / B / X / Y       : Trem Pouso (A) | Air Brake (B) | Afterburner (X) | Cenas (Y)")
+        print("   LS (Clique)         : Toggle Flaps | RS (Clique): Alternar Câmera (1/2/3)")
+        print("   RS (X / Y)          : Mover Câmera Orbital (quando na Câmera 3)")
+        print("   START / BACK        : Pause (START) | Reiniciar Caça (BACK)")
+        print("   D-Pad               : Menus/Sliders | Voo: Dia/Noite, Asas, HUD, Ciclo | F3: Skins/Paleta")
         print("=" * 78 + "\n")
 
         try:
@@ -355,6 +475,12 @@ class TopGraphicsApp:
                 last_time = now
 
                 glfw.poll_events()
+                self.gamepad.poll()
+
+                # Se estiver em Menu Principal, Pause ou Configurações, repassa navegação do Gamepad à UI
+                if self.ui.estado_atual in (MenuUI.ESTADO_MENU, MenuUI.ESTADO_PAUSE, MenuUI.ESTADO_CONFIG):
+                    for gp_key in self.gamepad.get_menu_key_events(dt):
+                        self.ui.handle_key(gp_key, glfw.PRESS, self)
 
                 width, height = glfw.get_framebuffer_size(window)
                 height = max(1, height)
@@ -386,6 +512,13 @@ class TopGraphicsApp:
                 brake_active = False
 
                 if not is_paused:
+                    # Botões discretos do Gamepad em jogo (A/B/X/Y/LS/RS/START/BACK/D-Pad)
+                    self.handle_gamepad_gameplay_buttons()
+                    # Reavalia pause caso START tenha sido pressionado neste frame
+                    is_paused = (self.ui.estado_atual in (MenuUI.ESTADO_PAUSE, MenuUI.ESTADO_CONFIG))
+                    simulation_dt = 0.0 if is_paused else dt
+
+                if not is_paused:
                     if glfw.get_key(window, glfw.KEY_UP) == glfw.PRESS:
                         pitch_in -= 1.0
                     if glfw.get_key(window, glfw.KEY_DOWN) == glfw.PRESS:
@@ -403,6 +536,21 @@ class TopGraphicsApp:
                     if glfw.get_key(window, glfw.KEY_S) == glfw.PRESS:
                         throttle_in -= 1.0
                         brake_active = True
+
+                    # Soma entradas analógicas/digitais do Gamepad (funciona simultaneamente ao teclado)
+                    if self.gamepad.connected:
+                        pitch_in = max(-1.0, min(1.0, pitch_in + self.gamepad.pitch))
+                        roll_in = max(-1.0, min(1.0, roll_in + self.gamepad.roll))
+                        yaw_in = max(-1.0, min(1.0, yaw_in + self.gamepad.yaw))
+                        throttle_in = max(-1.0, min(1.0, throttle_in + self.gamepad.throttle))
+                        brake_active = brake_active or self.gamepad.brake_active
+
+                        # RS X / RS Y controla a Câmera 3 (Orbital)
+                        self.camera.on_gamepad_orbit(
+                            self.gamepad.cam_orbit_x,
+                            self.gamepad.cam_orbit_y,
+                            simulation_dt
+                        )
 
                 # Atualiza cinemática da aeronave e física do oceano (pausadas se is_paused == True)
                 self.player.update(simulation_dt, pitch_in, roll_in, yaw_in, throttle_in, brake_active, self.scene_mode)

@@ -26,7 +26,7 @@ class CameraController:
     MODE_MESSAGES = {
         1: "[Câmera] Modo 1: Chase Cam (Perseguição Dinâmica)",
         2: "[Câmera] Modo 2: Cockpit / HUD Tático (Primeira Pessoa)",
-        3: "[Câmera] Modo 3: Orbital Livre 360° (Arraste o mouse / Scroll para zoom)",
+        3: "[Câmera] Modo 3: Orbital Livre 360° (Mouse / Scroll ou Analógico Direito RS)",
     }
 
     def __init__(self, aircraft):
@@ -90,6 +90,17 @@ class CameraController:
         """Scroll do mouse: zoom da câmera orbital."""
         if self.mode == 3:
             self.orbit_distance = np.clip(self.orbit_distance - yoffset * 2.0, 8.0, 80.0)
+
+    def on_gamepad_orbit(self, rx, ry, dt):
+        """
+        Analógico direito (RS X/Y) do gamepad: rotaciona suavemente a Câmera 3 (Orbital).
+          - RS X (+/-): gira horizontalmente ao redor do F-14 (orbit_yaw).
+          - RS Y (-/+): sobe/desce a elevação da câmera orbital (orbit_pitch).
+        """
+        if self.mode == 3 and (abs(rx) > 1e-4 or abs(ry) > 1e-4):
+            orbit_speed = 115.0  # graus por segundo em deflexão máxima
+            self.orbit_yaw += float(rx) * orbit_speed * dt
+            self.orbit_pitch = float(np.clip(self.orbit_pitch - float(ry) * orbit_speed * dt, -80.0, 85.0))
 
     def apply(self, aircraft, dt, scene_mode=1):
         """Aplica gluLookAt conforme o modo de câmera ativo (forçando Modo 3 na Cena 3)."""
