@@ -518,13 +518,16 @@ CLIP_CONFIG = {
         "fade_in_sec": 0.005, "fade_out_sec": 0.15,
     },
 
-    # Placeholder documentado para sprint futura (refatoração de partes móveis / flaps):
-    # "flaps": {
-    #     "path": "assets/audio/aircraft/events/FLAPS.wav",
-    #     "category": "sfx",
-    #     "start_sec": 0.2, "end_sec": 2.2,
-    #     "loop": False, "volume": 0.50, "speed": 1.0,
-    # },
+    # Atuador hidráulico dos Flaps (FLAPS.wav: 3.88s, 44.1kHz Mono MS_ADPCM, Peak -1.3 dBFS, RMS -12.8 dBFS)
+    # Volume calibrado em 0.40 para compensar o RMS forte (-12.8 dBFS) sem mascarar os motores;
+    # opera em loop contínuo controlado por target_gain enquanto os flaps estiverem em movimento.
+    "flaps": {
+        "path": "assets/audio/aircraft/events/FLAPS.wav",
+        "category": "sfx",
+        "start_sec": 0.08, "end_sec": 3.55,
+        "loop": True, "volume": 0.40, "speed": 1.0,
+        "fade_in_sec": 0.03, "fade_out_sec": 0.06,
+    },
 
     # --------------------------------------------------------------------------
     # G. SONS AMBIENTES (APENAS CENAS 1 E 2; CENA 3 E MENU NÃO TÊM SOM AMBIENTE)

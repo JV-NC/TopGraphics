@@ -403,7 +403,7 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
     speed_kt = float(aircraft.speed) * 10.0
     max_kt = float(aircraft.max_speed) * 10.0
     alt_ft = float(aircraft.pos[1]) * 10.0
-    vsi_fpm = float(aircraft.forward[1] * aircraft.speed) * 600.0 if not aircraft.on_ground else 0.0
+    vsi_fpm = float(aircraft.velocity[1]) * 600.0 if (not aircraft.on_ground and hasattr(aircraft, "velocity")) else (float(aircraft.forward[1] * aircraft.speed) * 600.0 if not aircraft.on_ground else 0.0)
 
     # 1. Fita de Velocidade (Esquerda)
     spd_x = max(92.0, cx - 285.0)
@@ -456,10 +456,35 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
     glColor4f(0.45, 1.0, 0.62, 1.0)
     draw_vector_text(f"{speed_kt:04.0f}", spd_x + 8.0, cy - 5.5, scale=11.0, align="right")
 
-    mach_num = speed_kt / 661.5
+    # Velocidade do som calibrada entre nível do mar (661.5 kt) e altitude supersônica (573.5 kt)
+    # para que o F-14D atinja exatamente Mach 2.34 a 1342 kt (2485 km/h).
+    sound_spd_kt = 661.5 - 88.0 * float(np.clip(speed_kt / 1342.0, 0.0, 1.0))
+    mach_num = speed_kt / sound_spd_kt
+
     glColor4f(0.65, 1.0, 0.75, 0.92)
     draw_vector_text(f"MAX {max_kt:.0f} KT", spd_x - 56.0, cy - tape_half_h - 16.0, scale=8.2, align="left")
     draw_vector_text(f"MACH {mach_num:.2f}", spd_x - 56.0, cy - tape_half_h - 30.0, scale=8.2, align="left")
+
+    # Indicador de Força G (G-LOAD) com alerta cromático em curvas fechadas
+    g_load = float(getattr(aircraft, "g_load", 1.0))
+    if g_load >= 7.5 or g_load <= -1.5:
+        glColor4f(1.0, 0.28, 0.18, 1.0)
+    elif g_load >= 5.5 or g_load <= -0.5:
+        glColor4f(1.0, 0.72, 0.18, 0.98)
+    else:
+        glColor4f(0.48, 1.0, 0.68, 0.95)
+    draw_vector_text(f"G-LOAD {g_load:+0.1f}G", spd_x - 56.0, cy - tape_half_h - 46.0, scale=8.2, align="left")
+
+    # Indicador de Ângulo de Ataque (AOA) com alerta próximo ao ângulo crítico
+    aoa_deg = float(getattr(aircraft, "aoa_deg", 0.0))
+    crit_aoa = float(getattr(aircraft, "critical_aoa_deg", 21.0))
+    if abs(aoa_deg) >= crit_aoa:
+        glColor4f(1.0, 0.25, 0.18, 1.0)
+    elif abs(aoa_deg) >= crit_aoa * 0.72:
+        glColor4f(1.0, 0.74, 0.20, 0.96)
+    else:
+        glColor4f(0.58, 0.96, 0.76, 0.90)
+    draw_vector_text(f"AOA {aoa_deg:+03.0f}°", spd_x - 56.0, cy - tape_half_h - 60.0, scale=8.0, align="left")
 
     # 2. Fita de Altitude (Direita)
     alt_x = min(width - 92.0, cx + 285.0)
@@ -515,15 +540,67 @@ def _draw_speed_and_altitude_tapes(width, height, aircraft):
 # 3. PAINÉIS INFERIORES DE TELEMETRIA E SISTEMAS (STATUS, THROTTLE, AB, TREM, ASAS)
 # ==============================================================================
 
+def _draw_g_force_vignette(width, height, aircraft, scene_mode):
+    """
+    Renderiza vinheta periférica suave para simular a sensação física de altos Gs:
+      - G-LOC (Blackout): escurecimento progressivo das bordas acima de +6.2 G.
+      - Redout: leve rubor nas bordas abaixo de -1.6 G.
+    """
+    if scene_mode == 3 or aircraft.on_ground or aircraft.crashed:
+        return
+
+    g_load = float(getattr(aircraft, "g_load", 1.0))
+    if g_load > 6.2:
+        intensity = float(np.clip((g_load - 6.2) / 3.3, 0.0, 1.0))
+        r, g, b, max_a = 0.0, 0.0, 0.0, 0.52 * intensity
+    elif g_load < -1.6:
+        intensity = float(np.clip((-1.6 - g_load) / 1.9, 0.0, 1.0))
+        r, g, b, max_a = 0.65, 0.05, 0.05, 0.36 * intensity
+    else:
+        return
+
+    pad_x = width * (0.14 + 0.12 * intensity)
+    pad_y = height * (0.14 + 0.12 * intensity)
+
+    glBegin(GL_QUADS)
+    glColor4f(r, g, b, max_a); glVertex2f(0.0, 0.0)
+    glColor4f(r, g, b, 0.0);   glVertex2f(pad_x, pad_y)
+    glColor4f(r, g, b, 0.0);   glVertex2f(pad_x, height - pad_y)
+    glColor4f(r, g, b, max_a); glVertex2f(0.0, height)
+
+    glColor4f(r, g, b, 0.0);   glVertex2f(width - pad_x, pad_y)
+    glColor4f(r, g, b, max_a); glVertex2f(width, 0.0)
+    glColor4f(r, g, b, max_a); glVertex2f(width, height)
+    glColor4f(r, g, b, 0.0);   glVertex2f(width - pad_x, height - pad_y)
+
+    glColor4f(r, g, b, max_a); glVertex2f(0.0, 0.0)
+    glColor4f(r, g, b, max_a); glVertex2f(width, 0.0)
+    glColor4f(r, g, b, 0.0);   glVertex2f(width - pad_x, pad_y)
+    glColor4f(r, g, b, 0.0);   glVertex2f(pad_x, pad_y)
+
+    glColor4f(r, g, b, 0.0);   glVertex2f(pad_x, height - pad_y)
+    glColor4f(r, g, b, 0.0);   glVertex2f(width - pad_x, height - pad_y)
+    glColor4f(r, g, b, max_a); glVertex2f(width, height)
+    glColor4f(r, g, b, max_a); glVertex2f(0.0, height)
+    glEnd()
+
+
 def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time):
     """
-    Renderiza os dois painéis inferiores da aeronave.
+    Renderiza os dois painéis inferiores da aeronave:
+      - Esquerdo: Status/Stall, Throttle, Afterburner [E] e Split Air Brake [B].
+      - Direito : Trem de Pouso [Q], Flaps [F], Wing Spoilers, Asas [G] e silhueta 2D.
     """
+    # --------------------------------------------------------------------------
+    # PAINEL INFERIOR ESQUERDO: STATUS, THROTTLE, AFTERBURNER E AIR BRAKE [B]
+    # --------------------------------------------------------------------------
     lx0, ly0 = 22.0, 20.0
-    lx1, ly1 = 278.0, 128.0
+    lx1, ly1 = 282.0, 152.0
     _draw_hud_panel_box(lx0, ly0, lx1, ly1, cut=6.0)
 
-    is_stalling = (scene_mode != 3) and (not aircraft.on_ground) and (aircraft.speed < aircraft.min_flight_speed * 1.05)
+    is_stalling = (scene_mode != 3) and (not aircraft.on_ground) and (
+        getattr(aircraft, "is_stalling", False) or (aircraft.speed < aircraft.min_flight_speed * 1.02)
+    )
     if scene_mode == 3:
         status_txt = "STATUS: MODO INSPECAO"
         status_col = (0.35, 0.95, 1.0, 1.0)
@@ -531,22 +608,22 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         status_txt = "STATUS: NO CONVES"
         status_col = (0.30, 0.95, 1.0, 1.0)
     elif is_stalling:
-        blink = 0.45 + 0.55 * abs(math.sin(sim_time * 8.0))
-        status_txt = "ALERTA: STALL / BAIXA VEL"
-        status_col = (1.0, 0.28, 0.15, blink)
+        blink = 0.45 + 0.55 * abs(math.sin(sim_time * 9.0))
+        status_txt = "ALERTA: STALL / AOA CRIT"
+        status_col = (1.0, 0.24, 0.15, blink)
     else:
         status_txt = "STATUS: EM VOO"
         status_col = (0.30, 1.0, 0.52, 1.0)
 
     glColor4f(*status_col)
-    draw_vector_text(status_txt, lx0 + 12.0, ly1 - 22.0, scale=9.5, align="left")
+    draw_vector_text(status_txt, lx0 + 12.0, ly1 - 22.0, scale=9.2, align="left")
 
     thr_pct = int(round(float(aircraft.throttle) * 100.0))
     glColor4f(0.65, 1.0, 0.75, 0.95)
-    draw_vector_text(f"THR [W/S]: {thr_pct:03d}%", lx0 + 12.0, ly1 - 48.0, scale=8.5, align="left")
+    draw_vector_text(f"THR [W/S]: {thr_pct:03d}%", lx0 + 12.0, ly1 - 46.0, scale=8.4, align="left")
 
-    bar_x0, bar_y0 = lx0 + 12.0, ly1 - 66.0
-    bar_w, bar_h = 230.0, 11.0
+    bar_x0, bar_y0 = lx0 + 12.0, ly1 - 63.0
+    bar_w, bar_h = 234.0, 10.0
     glColor4f(0.15, 0.65, 0.30, 0.75)
     glBegin(GL_LINE_LOOP)
     glVertex2f(bar_x0, bar_y0)
@@ -570,14 +647,27 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     if aircraft.afterburner:
         ab_pulse = 0.80 + 0.20 * math.sin(sim_time * 14.0)
         glColor4f(1.0, 0.60, 0.14, ab_pulse)
-        draw_vector_text("AB [E]: LIGADO [MAX BOOST]", lx0 + 12.0, ly0 + 12.0, scale=8.8, align="left")
+        draw_vector_text("AB [E]: LIGADO [MAX BOOST]", lx0 + 12.0, ly0 + 36.0, scale=8.4, align="left")
     else:
-        glColor4f(0.35, 0.80, 0.48, 0.80)
-        draw_vector_text("AB [E]: DESLIGADO [MIL]", lx0 + 12.0, ly0 + 12.0, scale=8.8, align="left")
+        glColor4f(0.35, 0.80, 0.48, 0.82)
+        draw_vector_text("AB [E]: DESLIGADO [MIL]", lx0 + 12.0, ly0 + 36.0, scale=8.4, align="left")
 
+    # Indicador do Split Air Brake [B]
+    brk_dep = float(getattr(aircraft, "airbrake_deploy", 0.0))
+    brk_pct = int(round(brk_dep * 100.0))
+    if brk_dep > 0.05:
+        glColor4f(1.0, 0.68, 0.18, 1.0)
+        draw_vector_text(f"BRK [B]: ABERTO {brk_pct:03d}%", lx0 + 12.0, ly0 + 12.0, scale=8.4, align="left")
+    else:
+        glColor4f(0.35, 0.78, 0.50, 0.78)
+        draw_vector_text("BRK [B]: FECHADO", lx0 + 12.0, ly0 + 12.0, scale=8.4, align="left")
+
+    # --------------------------------------------------------------------------
+    # PAINEL INFERIOR DIREITO: TREM [Q], FLAPS [F], SPOILERS E ASAS [G]
+    # --------------------------------------------------------------------------
     rx1 = width - 22.0
-    rx0 = rx1 - 278.0
-    ry0, ry1 = 20.0, 146.0
+    rx0 = rx1 - 286.0
+    ry0, ry1 = 20.0, 168.0
     _draw_hud_panel_box(rx0, ry0, rx1, ry1, cut=6.0)
 
     if aircraft.gear_deploy > 0.95:
@@ -591,10 +681,10 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         gear_col = (1.0, 0.75, 0.18, 1.0)
 
     glColor4f(*gear_col)
-    draw_vector_text(gear_txt, rx0 + 12.0, ry1 - 22.0, scale=8.6, align="left")
+    draw_vector_text(gear_txt, rx0 + 12.0, ry1 - 22.0, scale=8.4, align="left")
 
     gx_center = rx0 + 48.0
-    gy_center = ry1 - 50.0
+    gy_center = ry1 - 48.0
     wheel_offsets = [(0.0, 10.0), (-14.0, -6.0), (14.0, -6.0)]
     for wx, wy in wheel_offsets:
         if aircraft.gear_deploy > 0.90:
@@ -620,7 +710,28 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
             glVertex2f(gx_center + wx - 4.0, gy_center + wy + 2.0)
             glEnd()
 
-    # Status dos Wing Spoilers (ativo abaixo de 57°, travado em >= 57°)
+    # Status dos Flaps [F] (com indicação de trava por enflecamento >= 26°)
+    flaps_dep = float(getattr(aircraft, "flaps_deploy", 0.0))
+    flaps_locked = getattr(aircraft, "flaps_locked", False)
+    flaps_moving = getattr(aircraft, "flaps_moving", False)
+    if flaps_moving:
+        flaps_deg_now = int(round(flaps_dep * 35.0))
+        flaps_txt = f"FLAPS [F]: {flaps_deg_now:02d}° MOV"
+        flaps_col = (1.0, 0.76, 0.20, 1.0)
+    elif flaps_dep > 0.95:
+        flaps_txt = "FLAPS [F]: 35° EST"
+        flaps_col = (0.30, 0.98, 0.95, 1.0)
+    elif flaps_locked:
+        flaps_txt = "FLAPS [F]: TRAV"
+        flaps_col = (1.0, 0.64, 0.20, 0.90)
+    else:
+        flaps_txt = "FLAPS [F]: RECOLH"
+        flaps_col = (0.48, 0.88, 0.65, 0.84)
+
+    glColor4f(*flaps_col)
+    draw_vector_text(flaps_txt, rx0 + 12.0, ry0 + 58.0, scale=8.2, align="left")
+
+    # Status dos Wing Spoilers (compacto para não invadir a silhueta 2D do F-14)
     spoilers_locked = getattr(aircraft, "spoilers_locked", False)
     sp_l = float(getattr(aircraft, "spoiler_left_deg", 0.0))
     sp_r = float(getattr(aircraft, "spoiler_right_deg", 0.0))
@@ -637,17 +748,18 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
         sp_col = (0.45, 0.95, 0.62, 0.88)
 
     glColor4f(*sp_col)
-    draw_vector_text(sp_txt, rx0 + 12.0, ry0 + 34.0, scale=8.2, align="left")
+    draw_vector_text(sp_txt, rx0 + 12.0, ry0 + 35.0, scale=8.2, align="left")
 
     sweep_mode_str = "AUTO" if aircraft.auto_wing_sweep else "MAN"
     glColor4f(0.35, 1.0, 0.55, 0.95)
     draw_vector_text(
         f"ASAS [G]: {aircraft.wing_sweep_angle:02.0f}° {sweep_mode_str}",
-        rx0 + 12.0, ry0 + 12.0, scale=8.6, align="left"
+        rx0 + 12.0, ry0 + 12.0, scale=8.4, align="left"
     )
 
+    # Silhueta 2D dinâmica do F-14 (Asas + Spoilers + Flaps + Split Air Brake na cauda)
     icon_x = rx1 - 46.0
-    icon_y = ry0 + 64.0
+    icon_y = ry0 + 74.0
     sweep_rad = math.radians(float(aircraft.wing_sweep_angle))
 
     glColor4f(0.30, 1.0, 0.52, 0.90)
@@ -661,22 +773,33 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
     glVertex2f(icon_x + 6.0, icon_y - 16.0); glVertex2f(icon_x + 15.0, icon_y - 24.0)
     glEnd()
 
+    # Destaque âmbar no Beaver Tail quando o Split Air Brake [B] está aberto
+    if brk_dep > 0.08:
+        glColor4f(1.0, 0.65, 0.16, 1.0)
+        glLineWidth(2.4)
+        glBegin(GL_LINES)
+        glVertex2f(icon_x - 3.0, icon_y - 24.0); glVertex2f(icon_x + 3.0, icon_y - 24.0)
+        glVertex2f(icon_x, icon_y - 20.0);       glVertex2f(icon_x, icon_y - 27.0)
+        glEnd()
+
     wing_len = 24.0
     wx_span = wing_len * math.cos(sweep_rad)
     wy_back = wing_len * math.sin(sweep_rad)
     glLineWidth(2.2)
     glBegin(GL_LINES)
-    # Asa esquerda (destaca em ciano quando o spoiler esquerdo atua)
     if sp_l > 1.5 and not spoilers_locked:
         glColor4f(0.35, 0.95, 1.0, 1.0)
+    elif flaps_dep > 0.15:
+        glColor4f(0.35, 1.0, 0.90, 1.0)
     else:
         glColor4f(0.55, 1.0, 0.70, 1.0)
     glVertex2f(icon_x - 5.0, icon_y + 6.0)
     glVertex2f(icon_x - 5.0 - wx_span, icon_y + 6.0 - wy_back)
 
-    # Asa direita (destaca em ciano quando o spoiler direito atua)
     if sp_r > 1.5 and not spoilers_locked:
         glColor4f(0.35, 0.95, 1.0, 1.0)
+    elif flaps_dep > 0.15:
+        glColor4f(0.35, 1.0, 0.90, 1.0)
     else:
         glColor4f(0.55, 1.0, 0.70, 1.0)
     glVertex2f(icon_x + 5.0, icon_y + 6.0)
@@ -711,6 +834,7 @@ def draw_flight_hud(width, height, aircraft, camera_mode=1, scene_mode=1, sim_ti
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
     glEnable(GL_LINE_SMOOTH)
 
+    _draw_g_force_vignette(width, height, aircraft, scene_mode)
     _draw_compass_and_gps(width, height, aircraft, scene_mode)
     _draw_artificial_horizon(width, height, aircraft, camera_mode)
     _draw_speed_and_altitude_tapes(width, height, aircraft)
