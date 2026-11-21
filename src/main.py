@@ -11,7 +11,6 @@ Execução (a partir da raiz do repositório):
 
 # TODO: gamepad integration
 # TODO: implement key to cycle day/night states (sunrise, noon, sunset/night)
-# TODO: implement flaps sound
 
 import sys
 import time
@@ -182,6 +181,10 @@ class TopGraphicsApp:
                     self.audio.play_gear_sfx(deploying=self.player.gear_down)
             elif key == glfw.KEY_E:
                 self.player.toggle_afterburner()
+            elif key == glfw.KEY_F:
+                self.player.toggle_flaps()
+            elif key == glfw.KEY_B:
+                self.player.toggle_airbrake()
             elif key == glfw.KEY_M:
                 self.audio.toggle_mute()
             elif key == glfw.KEY_N:
@@ -296,6 +299,8 @@ class TopGraphicsApp:
         print(" [W / S]               : Potência (Throttle) / Segure 'S' no convés para Frear")
         print(" [E]                   : Ligar / Desligar Pós-Combustor (Afterburner EFSC)")
         print(" [Q]                   : Recolher / Baixar Trem de Pouso Retrátil (SFX + Arrasto)")
+        print(" [F]                   : Estender / Recolher Flaps (Ganho de Estol + FLAPS.wav, Trava >= 26°)")
+        print(" [B]                   : Abrir / Fechar Split Air Brakes no Beaver Tail (Freio Aerodinâmico)")
         print(" [Setas Baixo / Cima]  : Puxar Manche (Subir/Decolar) / Empurrar (Mergulhar)")
         print(" [Setas Esq / Dir]     : Rolagem (Roll - Inclinar Asas e acionar Spoilers)")
         print(" [A / D]               : Guinada (Leme em voo / Direção da roda no convés)")
@@ -380,6 +385,7 @@ class TopGraphicsApp:
                     crash_type=getattr(self.player, "crash_type", "solid"),
                     crash_reason=self.player.crash_reason,
                     paused=is_paused,
+                    flaps_moving=getattr(self.player, "flaps_moving", False),
                 )
 
                 if self.scene_mode == 3:

@@ -717,12 +717,31 @@ class AudioManager:
         """
         self.camera_mode = camera_mode
 
-    def _fade_out_flight_loops(self):
+    def _fade_out_flight_loops(self, include_flaps=False):
         """Coloca todos os loops de motor, afterburner e solo em rampa de fade-out."""
         for name, voice in self.voices.items():
-            if voice.category == "engine" or name == "ground_roll":
+            if voice.category == "engine" or name == "ground_roll" or (include_flaps and name == "flaps"):
                 voice.fade_rate = 4.5
                 voice.target_gain = 0.0
+
+    def update_flaps_sfx(self, moving):
+        """
+        Mantém o som hidráulico 'flaps' (FLAPS.wav) ativo exatamente enquanto os flaps
+        estiverem em deslocamento, aplicando fade-out suave (~0.11s) ao parar.
+        Funciona tanto em voo/solo quanto na Cena 3 de Inspeção.
+        """
+        if not self._running or "flaps" not in self.voices:
+            return
+        v_flaps = self.voices["flaps"]
+        if moving:
+            if not v_flaps.playing or v_flaps.current_gain <= 1e-3:
+                v_flaps.cursor = float(v_flaps.loop_start)
+            v_flaps.playing = True
+            v_flaps.fade_rate = 14.0
+            v_flaps.target_gain = 1.0
+        else:
+            v_flaps.fade_rate = 9.0
+            v_flaps.target_gain = 0.0
 
     # --------------------------------------------------------------------------
     # ATUALIZAÇÃO CONTÍNUA POR FRAME (CHAMADA NO LOOP DO MAIN.PY)
@@ -739,24 +758,28 @@ class AudioManager:
         crash_type="solid",
         crash_reason="",
         paused=False,
+        flaps_moving=False,
     ):
         """
         Atualiza em tempo real os ganhos dos segmentos de motor (JET_WHINE, COMBUSTION,
-        EFSC Afterburner), perspectiva interna/externa, rolagem no solo e eventos de
-        toque no convés (touchdown) ou colisão sólida/aquática + corte (shutdown).
+        EFSC Afterburner), flaps hidráulicos, perspectiva interna/externa, rolagem no solo
+        e eventos de toque no convés (touchdown) ou colisão sólida/aquática + corte.
         """
         if not self._running:
             return
 
-        # 0. Quando pausado (Pause/Config), silencia suavemente loops de voo sem perder o estado anterior
+        # 0. Quando pausado (Pause/Config), silencia suavemente loops de voo e flaps
         if paused:
-            self._fade_out_flight_loops()
+            self._fade_out_flight_loops(include_flaps=True)
             return
+
+        # Atualiza o som contínuo dos flaps (funciona em voo, convés e também na Cena 3 de Inspeção)
+        self.update_flaps_sfx(bool(flaps_moving) and not crashed and self.scene_mode != "menu")
 
         # 1. No Menu Principal ou na Cena 3 (Inspeção), motores de voo e rolagem permanecem desligados
         scene_cfg = SCENE_AUDIO_MAP.get(self.scene_mode, SCENE_AUDIO_MAP[3])
         if not scene_cfg.get("engines_active", False):
-            self._fade_out_flight_loops()
+            self._fade_out_flight_loops(include_flaps=(self.scene_mode == "menu"))
             self._prev_on_ground = on_ground
             self._prev_crashed = crashed
             self._prev_throttle = throttle
@@ -765,7 +788,7 @@ class AudioManager:
         # 2. Se ocorreu colisão neste frame, silencia motores e dispara som de impacto + corte (shutdown)
         if crashed:
             if not self._prev_crashed:
-                self._fade_out_flight_loops()
+                self._fade_out_flight_loops(include_flaps=True)
                 self.trigger_crash_sfx(crash_type=crash_type, crash_reason=crash_reason)
                 self.trigger_engine_shutdown()
             self._prev_crashed = True
