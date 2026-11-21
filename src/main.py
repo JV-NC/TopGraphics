@@ -10,7 +10,6 @@ Execução (a partir da raiz do repositório):
 """
 
 # TODO: gamepad integration
-# TODO: implement key to cycle day/night states (sunrise, noon, sunset/night)
 
 import sys
 import time
@@ -42,13 +41,21 @@ from scene_carrier import (
     update_ocean_physics,
     draw_physical_ocean,
 )
-from scene_canyon import create_canyon_texture, build_scene2_canyon_list
+from scene_canyon import (
+    create_canyon_texture,
+    build_scene2_canyon_list,
+    update_canyon_dust,
+    draw_canyon_dust,
+    reset_canyon_dust,
+)
 from scene_inspection import (
     apply_inspection_lighting,
     build_scene3_inspection_list,
     draw_inspection_overlay,
 )
 from scene_utils import (
+    TIME_OF_DAY_PRESETS,
+    DAY_CYCLE_HOURS_PER_SEC,
     create_cloud_vapor_texture,
     build_procedural_clouds_list,
     get_sun_state,
@@ -79,12 +86,17 @@ class TopGraphicsApp:
         self.has_cli_scene = initial_scene is not None
         self.scene_mode = initial_scene if initial_scene is not None else 1
 
-        # Estados de recursos gráficos e interface
+        # Estados de recursos gráficos, interface e ciclo Dia/Noite
         self.lighting_enabled = True
         self.textures_enabled = True
         self.wireframe_mode = False
         self.hud_enabled = True
         self.window = None
+
+        # Ciclo Dia/Noite (inicia no Amanhecer clássico 06:25; [C] alterna presets, [V] pausa/retoma)
+        self.time_preset_idx = 0
+        self.time_of_day_hours = TIME_OF_DAY_PRESETS[0]["hour"]
+        self.day_cycle_paused = False
 
         # Instância única do F-14 Tomcat
         self.player = Aircraft()
@@ -128,6 +140,7 @@ class TopGraphicsApp:
 
         self.scene_mode = target_scene
         self.player.reset(self.scene_mode)
+        reset_canyon_dust()
 
         if self.scene_mode == 3:
             self.camera.set_mode(3, scene_mode=3)
@@ -139,6 +152,15 @@ class TopGraphicsApp:
         self.audio.sync_aircraft_state(self.player.on_ground, self.player.throttle, self.player.crashed)
         self.audio.set_scene(self.scene_mode, force_init=True)
         print(f"[Cenário] Alternado para {self.SCENE_NAMES[self.scene_mode]}")
+
+    def cycle_time_of_day(self):
+        """Avança para o próximo horário do ciclo Dia/Noite (Amanhecer -> Meio-Dia -> Pôr do Sol -> Noite)."""
+        self.time_preset_idx = (self.time_preset_idx + 1) % len(TIME_OF_DAY_PRESETS)
+        preset = TIME_OF_DAY_PRESETS[self.time_preset_idx]
+        self.time_of_day_hours = float(preset["hour"])
+        hh = int(self.time_of_day_hours)
+        mm = int((self.time_of_day_hours - hh) * 60.0)
+        print(f"[Ciclo Dia/Noite] Horário alterado para {preset['label']} ({hh:02d}:{mm:02d})")
 
     def key_callback(self, window, key, scancode, action, mods):
         """Trata atalhos de teclado, redirecionando para a UI quando em menus ou pause."""
@@ -185,6 +207,16 @@ class TopGraphicsApp:
                 self.player.toggle_flaps()
             elif key == glfw.KEY_B:
                 self.player.toggle_airbrake()
+            elif key == glfw.KEY_C:
+                if self.scene_mode in (1, 2):
+                    self.cycle_time_of_day()
+                else:
+                    print("[Ciclo Dia/Noite] Disponível nas Cenas 1 (Oceano) e 2 (Cânion).")
+            elif key == glfw.KEY_V:
+                if self.scene_mode in (1, 2):
+                    self.day_cycle_paused = not self.day_cycle_paused
+                    estado = "FIXO (PAUSADO)" if self.day_cycle_paused else "AUTOMÁTICO (CONTÍNUO)"
+                    print(f"[Ciclo Dia/Noite] Progressão Solar: {estado}")
             elif key == glfw.KEY_M:
                 self.audio.toggle_mute()
             elif key == glfw.KEY_N:
@@ -206,6 +238,7 @@ class TopGraphicsApp:
                 print(f"[HUD] Interface Tática: {'ATIVADA' if self.hud_enabled else 'OCULTA'}")
             elif key == glfw.KEY_R:
                 self.player.reset(self.scene_mode)
+                reset_canyon_dust()
                 if self.scene_mode == 3:
                     self.camera.set_mode(3, scene_mode=3)
                 else:
@@ -289,7 +322,7 @@ class TopGraphicsApp:
         self.audio.start()
 
         last_time = time.time()
-        start_time = last_time
+        sim_time = 0.0
 
         print("\n" + "=" * 78)
         print(" TOP GRAPHICS - SIMULADOR DE VOO F-14 TOMCAT (CEFET-MG)")
@@ -309,6 +342,7 @@ class TopGraphicsApp:
         print(" [M / N]               : Mute Geral do Áudio (M) / Mute da Música (N)")
         print(" [H]                   : Mostrar / Ocultar HUD Tático (e HUD de Skins na Cena 3)")
         print(" [1 / 2 / 3]           : Câmeras (1/3: Áudio Externo | 2: Áudio Interno Cockpit)")
+        print(" [C / V]               : Alternar Horário Dia/Noite (C) / Fixar ou Retomar Ciclo (V)")
         print(" [L / T / Z]           : Ligar/Desligar Luzes (L), Texturas (T), Wireframe (Z)")
         print(" [R]                   : Reiniciar Posição/Atitude do Caça imediatamente")
         print(" [ESC]                 : Sair")
@@ -319,7 +353,6 @@ class TopGraphicsApp:
                 now = time.time()
                 dt = min(0.05, now - last_time)
                 last_time = now
-                sim_time = now - start_time
 
                 glfw.poll_events()
 
@@ -340,6 +373,11 @@ class TopGraphicsApp:
                 # Se estiver na Tela de Pause ou Configurações, renderiza a cena congelada ao fundo + UI por cima
                 is_paused = (self.ui.estado_atual in (MenuUI.ESTADO_PAUSE, MenuUI.ESTADO_CONFIG))
                 simulation_dt = 0.0 if is_paused else dt
+                sim_time += simulation_dt
+
+                # Avança suavemente o relógio do ciclo Dia/Noite nas Cenas 1 e 2
+                if (not is_paused) and (not self.day_cycle_paused) and self.scene_mode in (1, 2):
+                    self.time_of_day_hours = (self.time_of_day_hours + simulation_dt * DAY_CYCLE_HOURS_PER_SEC) % 24.0
 
                 pitch_in = 0.0
                 roll_in = 0.0
@@ -372,6 +410,8 @@ class TopGraphicsApp:
 
                 if self.scene_mode == 1:
                     update_ocean_physics(simulation_dt, self.player, sim_time)
+                elif self.scene_mode == 2:
+                    update_canyon_dust(simulation_dt, self.player, sim_time)
 
                 # Sincroniza o áudio (pausado suavemente se pause/config)
                 audio_dt = 0.0 if is_paused else dt
@@ -388,10 +428,13 @@ class TopGraphicsApp:
                     flaps_moving=getattr(self.player, "flaps_moving", False),
                 )
 
+                sun_state = None
                 if self.scene_mode == 3:
                     apply_inspection_lighting(self.lighting_enabled)
                 else:
-                    sun_state = get_sun_state(sim_time if not is_paused else 0.0, self.scene_mode)
+                    sun_state = get_sun_state(
+                        sim_time, self.scene_mode, time_of_day_hours=self.time_of_day_hours
+                    )
                     apply_sunrise_lighting(sun_state, self.lighting_enabled)
 
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -438,13 +481,14 @@ class TopGraphicsApp:
                     draw_physical_ocean(
                         self.player,
                         ocean_tex,
-                        sim_time if not is_paused else 0.0,
+                        sim_time,
                         lighting_enabled=self.lighting_enabled,
                         textures_enabled=self.textures_enabled,
                         wireframe_mode=self.wireframe_mode,
+                        sun_state=sun_state,
                     )
-                    # 3. Reflexo cintilante do nascer do sol sobre as ondas
-                    draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time if not is_paused else 0.0)
+                    # 3. Reflexo cintilante do Sol ou da Lua sobre as ondas
+                    draw_ocean_sun_glitter(self.player.pos, sun_state, sim_time)
                 elif self.scene_mode == 2:
                     draw_periodic_scene(scene2_list, self.player.pos, scene_mode=2)
                 else:
@@ -460,16 +504,21 @@ class TopGraphicsApp:
                         self.player,
                         player_fuselage_list,
                         wing_tex,
-                        sim_time if not is_paused else 0.0,
+                        sim_time,
                         skin_manager=self.skin_manager,
                         skinned_fuselage_dlist=player_skinned_fuselage_list,
                     )
 
+                # Partículas de poeira e areia em voo rasante no Cânion (renderizadas após a cena e o caça)
+                if self.scene_mode == 2:
+                    draw_canyon_dust(sun_state=sun_state, wireframe_mode=self.wireframe_mode)
+
                 if self.scene_mode in (1, 2):
                     active_clouds = clouds1_list if self.scene_mode == 1 else clouds2_list
                     draw_procedural_clouds(
-                        active_clouds, cloud_vapor_tex, sim_time if not is_paused else 0.0,
-                        player_pos=self.player.pos, scene_mode=self.scene_mode
+                        active_clouds, cloud_vapor_tex, sim_time,
+                        player_pos=self.player.pos, scene_mode=self.scene_mode,
+                        sun_state=sun_state,
                     )
 
                 if self.hud_enabled:
@@ -477,7 +526,9 @@ class TopGraphicsApp:
                         width, height, self.player,
                         camera_mode=self.camera.mode,
                         scene_mode=self.scene_mode,
-                        sim_time=sim_time if not is_paused else 0.0
+                        sim_time=sim_time,
+                        sun_state=sun_state,
+                        day_cycle_paused=self.day_cycle_paused,
                     )
                     if self.scene_mode == 3:
                         draw_inspection_overlay(

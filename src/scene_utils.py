@@ -1,18 +1,19 @@
-# TODO: implement key to cycle day/night states (sunrise, noon, sunset/night)
-
 """
 ================================================================================
 TopGraphics | scene_utils.py
-Utilitários compartilhados de ambiente, atmosfera e mundo periódico ("Roundabout"):
+Utilitários compartilhados de ambiente, atmosfera, ciclo Dia/Noite e Roundabout:
   1. Sistema de Mundo Infinito / Roundabout (Toroide):
      - Teleporta suavemente o caça para a borda oposta ao cruzar os limites (X, Z)
-       e renderiza as cópias periódicas adjacentes da Display List da cena logo à
-       frente do jogador, criando a ilusão perfeita de volta ao mundo sem bordas.
-  2. Sistema de Nascer do Sol (Rising Sun) Otimizado com Display List:
-     - Abóbada celeste esférica completa (-90° a +90°), disco solar e halos compilados
-       em Display List (atualizada a cada 0.5s), eliminando gargalos de CPU em Python.
-  3. Nuvens Procedurais Volumétricas (Vapor Semitransparente) distribuídas por todo
-     o domínio periódico de cada mapa.
+       e renderiza as cópias periódicas adjacentes da Display List da cena.
+  2. Sistema Completo de Ciclo Dia e Noite (24h Contínuo + Presets pela Tecla [C]):
+     - Amanhecer (06:25), Meio-Dia (12:00), Pôr do Sol (17:35) e Noite (21:00).
+     - Abóbada celeste esférica completa (-90° a +90°), disco solar com halos,
+       Lua cheia com halo prateado e campo estelar procedural compilados em
+       Display List com cache inteligente.
+     - Iluminação direcional principal (GL_LIGHT0: Sol ou Lua) + preenchimento
+       atmosférico hemisférico (GL_LIGHT2) + trilha de reflexo no oceano (Sol/Lua).
+  3. Nuvens Procedurais Volumétricas (Vapor Semitransparente) com tonalidade
+     dinâmica sincronizada ao horário do dia e suporte periódico.
 ================================================================================
 """
 
@@ -67,7 +68,7 @@ def wrap_position_roundabout(pos, scene_mode):
     Aplica o teleporte toroidal (Roundabout) na posição 3D da aeronave
     quando ela ultrapassa os limites (X ou Z) do mapa.
     Retorna o vetor 'wrap_delta' (deslocamento aplicado), que também deve ser
-    somado à Chase Cam para que a câmera acompanhe o teleporte sem nenhum salto visual.
+    somado à Chase Cam e aos sistemas de partículas para continuidade sem saltos.
     """
     x_min, x_max, span_x, z_min, z_max, span_z = get_scene_bounds(scene_mode)
     old_x = float(pos[0])
@@ -76,14 +77,10 @@ def wrap_position_roundabout(pos, scene_mode):
     new_x = old_x
     new_z = old_z
 
-    if old_x < x_min:
-        new_x = ((old_x - x_min) % span_x) + x_min
-    elif old_x >= x_max:
+    if old_x < x_min or old_x >= x_max:
         new_x = ((old_x - x_min) % span_x) + x_min
 
-    if old_z < z_min:
-        new_z = ((old_z - z_min) % span_z) + z_min
-    elif old_z >= z_max:
+    if old_z < z_min or old_z >= z_max:
         new_z = ((old_z - z_min) % span_z) + z_min
 
     dx = new_x - old_x
@@ -110,15 +107,11 @@ def get_visible_periodic_offsets(player_pos, scene_mode):
     """
     Determina quais cópias periódicas (tiles vizinhos) do mapa estão dentro do
     alcance visual da câmera (WORLD_VIEW_DISTANCE) a partir de 'player_pos'.
-    Assim, antes mesmo do caça cruzar a fronteira do mapa, o lado oposto já está
-    renderizado logo à sua frente!
     """
     x_min, x_max, span_x, z_min, z_max, span_z = get_scene_bounds(scene_mode)
     px, py, pz = float(player_pos[0]), float(player_pos[1]), float(player_pos[2])
 
     if scene_mode == 1:
-        # Na Cena 1 (span = 4800m), avalia a vizinhança 3x3 e desenha apenas os tiles
-        # cuja borda está dentro do raio de visão de 3450m.
         offsets = []
         for ix in (-1, 0, 1):
             tx_min = x_min + ix * span_x
@@ -134,11 +127,6 @@ def get_visible_periodic_offsets(player_pos, scene_mode):
                     offsets.append((ix * span_x, iz * span_z))
         return offsets
 
-    # Na Cena 2 (Cânion: span_z = 2000m, span_x = 720m):
-    # Sempre desenha o tile atual (iz = 0) e os vizinhos frontal/traseiro (iz = -1, +1)
-    # para que o corredor de 6000m nunca tenha fim visível.
-    # Nos lados (ix = -1, +1), só precisa instanciar se o caça subir acima dos paredões
-    # (py > 90m) ou se afastar lateralmente do centro do cânion (|px| > 150m).
     if py > 90.0 or abs(px) > 150.0:
         x_indices = (-1, 0, 1)
     else:
@@ -154,8 +142,7 @@ def get_visible_periodic_offsets(player_pos, scene_mode):
 def draw_periodic_scene(scene_dlist, player_pos, scene_mode):
     """
     Renderiza a Display List do cenário no tile principal (0, 0) e nas cópias
-    periódicas adjacentes visíveis, garantindo continuidade visual 100% sem costuras
-    no efeito Roundabout (Pac-Man).
+    periódicas adjacentes visíveis, garantindo continuidade visual sem costuras.
     """
     offsets = get_visible_periodic_offsets(player_pos, scene_mode)
     for ox, oz in offsets:
@@ -169,118 +156,366 @@ def draw_periodic_scene(scene_dlist, player_pos, scene_mode):
 
 
 # ==============================================================================
-# 1. CONFIGURAÇÃO DO NASCER DO SOL (RISING SUN) E ATMOSFERA (COM CACHE DE GPU)
+# 1. SISTEMA DE CICLO DIA E NOITE (24H CONTÍNUO + PRESETS MANUAIS TECLA [C])
 # ==============================================================================
 
 SKY_DOME_RADIUS = 2200.0        # Raio da abóbada celeste esférica (dentro do zFar = 3500)
-SUN_DISTANCE = 2100.0           # Distância do disco solar no horizonte (-Z)
-SUN_AZIMUTH_RAD = 0.0           # Alinhado exatamente com o Leste da bússola (090° E no eixo -Z)
-SUN_RISE_DURATION = 240.0       # Tempo (s) para o sol subir da aurora até a manhã alta
-SUN_MIN_ELEV_DEG = 4.5          # Elevação inicial (rasante ao horizonte no início do voo)
-SUN_MAX_ELEV_DEG = 26.0         # Elevação máxima após o ciclo de subida
+SUN_DISTANCE = 2100.0           # Distância do disco solar e lunar no céu
+DAY_CYCLE_DURATION_SEC = 360.0  # 1 ciclo completo de 24h a cada 6 minutos em modo AUTO
+DAY_CYCLE_HOURS_PER_SEC = 24.0 / DAY_CYCLE_DURATION_SEC
 
-# Cache interno de Display List para o Sky Dome (evita recalcular 800+ vértices em Python a cada frame)
+# Presets cíclicos acionados pela tecla [C]
+TIME_OF_DAY_PRESETS = [
+    {"id": "sunrise", "label": "AMANHECER",  "hour": 6.42},
+    {"id": "noon",    "label": "MEIO-DIA",   "hour": 12.00},
+    {"id": "sunset",  "label": "POR DO SOL", "hour": 17.58},
+    {"id": "night",   "label": "NOITE",      "hour": 20.85},
+]
+
+# Constantes legadas mantidas por retrocompatibilidade
+SUN_RISE_DURATION = DAY_CYCLE_DURATION_SEC
+SUN_MIN_ELEV_DEG = 4.5
+SUN_MAX_ELEV_DEG = 72.0
+
+# Keyframes de paleta atmosférica e iluminação ao longo das 24 horas (hora, valores)
+# Cada entrada define:
+#   zenith, upper, mid, horizon,
+#   sun_core, sun_halo,
+#   light_amb, light_diff, light_spec, fill_diff, cloud_tint, star_alpha
+_DAY_CYCLE_KEYFRAMES = [
+    # 00:00 — Meia-noite (luar prateado e visibilidade noturna segura para voo)
+    (0.0, {
+        "zenith":  [0.015, 0.025, 0.075],
+        "upper":   [0.025, 0.042, 0.115],
+        "mid":     [0.045, 0.070, 0.165],
+        "horizon": [0.075, 0.110, 0.215],
+        "sun_core": [0.95, 0.45, 0.22],
+        "sun_halo": [0.90, 0.28, 0.12],
+        "amb":     [0.14, 0.18, 0.28],
+        "diff":    [0.26, 0.32, 0.48],
+        "spec":    [0.24, 0.28, 0.40],
+        "fill":    [0.12, 0.16, 0.25],
+        "cloud":   [0.34, 0.40, 0.56],
+        "stars":   1.00,
+    }),
+    # 04:45 — Pré-aurora (céu noturno começando a clarear no horizonte Leste)
+    (4.75, {
+        "zenith":  [0.025, 0.040, 0.110],
+        "upper":   [0.050, 0.075, 0.175],
+        "mid":     [0.140, 0.120, 0.230],
+        "horizon": [0.340, 0.180, 0.210],
+        "sun_core": [1.00, 0.62, 0.30],
+        "sun_halo": [0.96, 0.30, 0.12],
+        "amb":     [0.17, 0.19, 0.27],
+        "diff":    [0.34, 0.34, 0.44],
+        "spec":    [0.26, 0.26, 0.34],
+        "fill":    [0.16, 0.18, 0.26],
+        "cloud":   [0.54, 0.46, 0.54],
+        "stars":   0.72,
+    }),
+    # 06:25 — Amanhecer clássico Top Graphics (Sol baixo a Leste -Z, dourado/âmbar)
+    (6.42, {
+        "zenith":  [0.090, 0.155, 0.360],
+        "upper":   [0.180, 0.265, 0.510],
+        "mid":     [0.500, 0.355, 0.460],
+        "horizon": [0.940, 0.460, 0.240],
+        "sun_core": [1.00, 0.93, 0.74],
+        "sun_halo": [1.00, 0.42, 0.15],
+        "amb":     [0.28, 0.25, 0.28],
+        "diff":    [0.60, 0.50, 0.40],
+        "spec":    [0.34, 0.29, 0.22],
+        "fill":    [0.24, 0.25, 0.31],
+        "cloud":   [0.98, 0.80, 0.66],
+        "stars":   0.04,
+    }),
+    # 08:30 — Manhã alta
+    (8.50, {
+        "zenith":  [0.150, 0.360, 0.740],
+        "upper":   [0.290, 0.540, 0.860],
+        "mid":     [0.560, 0.720, 0.900],
+        "horizon": [0.850, 0.860, 0.840],
+        "sun_core": [1.00, 0.97, 0.88],
+        "sun_halo": [1.00, 0.82, 0.52],
+        "amb":     [0.34, 0.35, 0.38],
+        "diff":    [0.72, 0.70, 0.65],
+        "spec":    [0.44, 0.43, 0.40],
+        "fill":    [0.28, 0.32, 0.40],
+        "cloud":   [0.98, 0.96, 0.94],
+        "stars":   0.00,
+    }),
+    # 12:00 — Meio-Dia (Sol a pino, céu azul cristalino, luz intensa e limpa)
+    (12.00, {
+        "zenith":  [0.110, 0.340, 0.780],
+        "upper":   [0.240, 0.530, 0.900],
+        "mid":     [0.480, 0.730, 0.950],
+        "horizon": [0.760, 0.880, 0.960],
+        "sun_core": [1.00, 0.99, 0.95],
+        "sun_halo": [1.00, 0.95, 0.78],
+        "amb":     [0.38, 0.40, 0.44],
+        "diff":    [0.78, 0.78, 0.76],
+        "spec":    [0.50, 0.50, 0.48],
+        "fill":    [0.30, 0.36, 0.45],
+        "cloud":   [1.00, 1.00, 1.00],
+        "stars":   0.00,
+    }),
+    # 15:30 — Tarde ensolarada
+    (15.50, {
+        "zenith":  [0.150, 0.350, 0.720],
+        "upper":   [0.310, 0.520, 0.820],
+        "mid":     [0.620, 0.700, 0.840],
+        "horizon": [0.900, 0.800, 0.680],
+        "sun_core": [1.00, 0.96, 0.84],
+        "sun_halo": [1.00, 0.76, 0.42],
+        "amb":     [0.34, 0.33, 0.34],
+        "diff":    [0.72, 0.66, 0.56],
+        "spec":    [0.42, 0.38, 0.32],
+        "fill":    [0.26, 0.29, 0.36],
+        "cloud":   [1.00, 0.92, 0.84],
+        "stars":   0.00,
+    }),
+    # 17:35 — Pôr do Sol (Sol baixo a Oeste +Z, céu carmesim/violeta/laranja Top Gun)
+    (17.58, {
+        "zenith":  [0.105, 0.115, 0.295],
+        "upper":   [0.240, 0.165, 0.360],
+        "mid":     [0.620, 0.280, 0.320],
+        "horizon": [0.980, 0.390, 0.170],
+        "sun_core": [1.00, 0.86, 0.58],
+        "sun_halo": [1.00, 0.32, 0.11],
+        "amb":     [0.27, 0.21, 0.25],
+        "diff":    [0.62, 0.42, 0.30],
+        "spec":    [0.36, 0.26, 0.18],
+        "fill":    [0.22, 0.20, 0.28],
+        "cloud":   [0.98, 0.66, 0.50],
+        "stars":   0.10,
+    }),
+    # 19:00 — Crepúsculo (Blue Hour, primeiras estrelas aparecendo)
+    (19.00, {
+        "zenith":  [0.030, 0.045, 0.130],
+        "upper":   [0.065, 0.080, 0.200],
+        "mid":     [0.170, 0.135, 0.255],
+        "horizon": [0.380, 0.200, 0.220],
+        "sun_core": [0.96, 0.48, 0.22],
+        "sun_halo": [0.92, 0.26, 0.12],
+        "amb":     [0.18, 0.19, 0.28],
+        "diff":    [0.34, 0.34, 0.46],
+        "spec":    [0.26, 0.27, 0.36],
+        "fill":    [0.16, 0.18, 0.27],
+        "cloud":   [0.52, 0.46, 0.58],
+        "stars":   0.78,
+    }),
+    # 20:50 — Noite estrelada com Lua cheia elevada à frente
+    (20.85, {
+        "zenith":  [0.015, 0.025, 0.075],
+        "upper":   [0.025, 0.042, 0.115],
+        "mid":     [0.045, 0.070, 0.165],
+        "horizon": [0.075, 0.110, 0.215],
+        "sun_core": [0.95, 0.45, 0.22],
+        "sun_halo": [0.90, 0.28, 0.12],
+        "amb":     [0.14, 0.18, 0.28],
+        "diff":    [0.26, 0.32, 0.48],
+        "spec":    [0.24, 0.28, 0.40],
+        "fill":    [0.12, 0.16, 0.25],
+        "cloud":   [0.34, 0.40, 0.56],
+        "stars":   1.00,
+    }),
+    # 24:00 — Fechamento periódico exato com 00:00
+    (24.0, {
+        "zenith":  [0.015, 0.025, 0.075],
+        "upper":   [0.025, 0.042, 0.115],
+        "mid":     [0.045, 0.070, 0.165],
+        "horizon": [0.075, 0.110, 0.215],
+        "sun_core": [0.95, 0.45, 0.22],
+        "sun_halo": [0.90, 0.28, 0.12],
+        "amb":     [0.14, 0.18, 0.28],
+        "diff":    [0.26, 0.32, 0.48],
+        "spec":    [0.24, 0.28, 0.40],
+        "fill":    [0.12, 0.16, 0.25],
+        "cloud":   [0.34, 0.40, 0.56],
+        "stars":   1.00,
+    }),
+]
+
+# Campo estelar determinístico na abóbada celeste (420 estrelas)
+def _generate_starfield(count=420):
+    rng = np.random.default_rng(198605)
+    stars = []
+    for _ in range(count):
+        # Distribuição uniforme sobre a calota celeste (elevação entre 3° e 88°)
+        u = float(rng.uniform(0.05, 1.0))
+        elev = math.asin(u)
+        azim = float(rng.uniform(0.0, 2.0 * math.pi))
+        r = SKY_DOME_RADIUS * 0.96
+        x = r * math.cos(elev) * math.sin(azim)
+        y = r * math.sin(elev)
+        z = -r * math.cos(elev) * math.cos(azim)
+        bright = float(rng.uniform(0.45, 1.0))
+        size = float(rng.choice([1.4, 1.8, 2.3, 3.0], p=[0.48, 0.32, 0.15, 0.05]))
+        # Variação realista de temperatura espectral (azuladas, brancas, amareladas)
+        tint_pick = float(rng.random())
+        if tint_pick < 0.28:
+            col = (0.78 * bright, 0.88 * bright, 1.00 * bright)
+        elif tint_pick < 0.82:
+            col = (0.96 * bright, 0.97 * bright, 1.00 * bright)
+        else:
+            col = (1.00 * bright, 0.92 * bright, 0.78 * bright)
+        stars.append((x, y, z, col[0], col[1], col[2], size))
+    return stars
+
+
+_SKY_STARS = _generate_starfield(420)
+
+# Cache interno de Display List para o Sky Dome
 _sky_dome_cache = {
     "dlist": None,
     "last_key": None,
 }
 
 
-def get_sun_state(sim_time, scene_mode=1):
+def get_phase_label_for_hour(hour):
+    """Retorna o rótulo da fase do ciclo solar para uma hora em [0..24)."""
+    h = float(hour) % 24.0
+    if 5.2 <= h < 8.5:
+        return "AMANHECER"
+    elif 8.5 <= h < 16.0:
+        return "MEIO-DIA"
+    elif 16.0 <= h < 19.2:
+        return "POR DO SOL"
+    return "NOITE"
+
+
+def format_clock_hhmm(hour):
+    """Formata uma hora decimal (ex: 6.42) em string 'HH:MM'."""
+    h = float(hour) % 24.0
+    hh = int(h)
+    mm = int((h - hh) * 60.0)
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _sample_day_keyframes(hour):
+    """Interpola suavemente todos os parâmetros atmosféricos para a hora [0..24)."""
+    h = float(hour) % 24.0
+    for idx in range(len(_DAY_CYCLE_KEYFRAMES) - 1):
+        h0, k0 = _DAY_CYCLE_KEYFRAMES[idx]
+        h1, k1 = _DAY_CYCLE_KEYFRAMES[idx + 1]
+        if h0 <= h <= h1:
+            u = (h - h0) / max(1e-5, (h1 - h0))
+            u = u * u * (3.0 - 2.0 * u)  # Smoothstep
+            res = {}
+            for key in k0:
+                v0 = k0[key]
+                v1 = k1[key]
+                if isinstance(v0, list):
+                    res[key] = (1.0 - u) * np.array(v0, dtype=np.float32) + u * np.array(v1, dtype=np.float32)
+                else:
+                    res[key] = float((1.0 - u) * v0 + u * v1)
+            return res
+    # Fallback seguro
+    return {k: (np.array(v, dtype=np.float32) if isinstance(v, list) else float(v)) for k, v in _DAY_CYCLE_KEYFRAMES[0][1].items()}
+
+
+def get_sun_state(sim_time, scene_mode=1, time_of_day_hours=None):
     """
-    Calcula a progressão contínua do nascer do sol em função de 'sim_time'.
+    Calcula a astronomia completa do ciclo Dia/Noite (Sol, Lua, Estrelas, Abóbada Celeste
+    e Iluminação Direcional + Hemisférica):
+      - Se 'time_of_day_hours' for fornecido (0..24), usa esse horário diretamente.
+      - Caso contrário, deriva o horário continuamente a partir de 'sim_time' iniciando em 06:25.
     """
-    progress = min(1.0, max(0.0, sim_time / SUN_RISE_DURATION))
-    t = progress * progress * (3.0 - 2.0 * progress)
-
-    elev_deg = SUN_MIN_ELEV_DEG + t * (SUN_MAX_ELEV_DEG - SUN_MIN_ELEV_DEG)
-    elev_rad = math.radians(elev_deg)
-
-    sx = math.cos(elev_rad) * math.sin(SUN_AZIMUTH_RAD)
-    sy = math.sin(elev_rad)
-    sz = -math.cos(elev_rad) * math.cos(SUN_AZIMUTH_RAD)
-    sun_dir = normalize(np.array([sx, sy, sz], dtype=np.float32))
-
-    if scene_mode == 1:
-        zenith_dawn = np.array([0.08, 0.14, 0.34], dtype=np.float32)
-        zenith_day  = np.array([0.18, 0.38, 0.72], dtype=np.float32)
-        upper_dawn  = np.array([0.16, 0.24, 0.48], dtype=np.float32)
-        upper_day   = np.array([0.32, 0.54, 0.84], dtype=np.float32)
-        mid_dawn    = np.array([0.48, 0.34, 0.46], dtype=np.float32)
-        mid_day     = np.array([0.62, 0.66, 0.78], dtype=np.float32)
-        horiz_dawn  = np.array([0.92, 0.44, 0.24], dtype=np.float32)
-        horiz_day   = np.array([0.96, 0.76, 0.52], dtype=np.float32)
+    if time_of_day_hours is None:
+        hour = (6.42 + float(sim_time) * DAY_CYCLE_HOURS_PER_SEC) % 24.0
     else:
-        zenith_dawn = np.array([0.12, 0.13, 0.30], dtype=np.float32)
-        zenith_day  = np.array([0.24, 0.38, 0.66], dtype=np.float32)
-        upper_dawn  = np.array([0.24, 0.20, 0.40], dtype=np.float32)
-        upper_day   = np.array([0.42, 0.52, 0.74], dtype=np.float32)
-        mid_dawn    = np.array([0.58, 0.34, 0.38], dtype=np.float32)
-        mid_day     = np.array([0.72, 0.62, 0.64], dtype=np.float32)
-        horiz_dawn  = np.array([0.96, 0.42, 0.20], dtype=np.float32)
-        horiz_day   = np.array([0.95, 0.72, 0.46], dtype=np.float32)
+        hour = float(time_of_day_hours) % 24.0
 
-    zenith_color = (1.0 - t) * zenith_dawn + t * zenith_day
-    upper_sky_color = (1.0 - t) * upper_dawn + t * upper_day
-    mid_sky_color = (1.0 - t) * mid_dawn + t * mid_day
-    horizon_color = (1.0 - t) * horiz_dawn + t * horiz_day
+    # Ângulo solar: 06:00 = 0 rad (Leste -Z), 12:00 = pi/2 (Alto), 18:00 = pi (Oeste +Z)
+    theta = ((hour - 6.0) / 24.0) * (2.0 * math.pi)
+    orbit_tilt = math.radians(18.0)  # Inclinação orbital para Sul (+X), gerando sombras 3D ao meio-dia
 
-    sun_core = np.array([1.0, 0.92 + 0.06 * t, 0.72 + 0.20 * t], dtype=np.float32)
-    sun_halo = (1.0 - t) * np.array([1.0, 0.38, 0.14], dtype=np.float32) + t * np.array([1.0, 0.72, 0.32], dtype=np.float32)
+    sun_x = math.sin(theta) * math.sin(orbit_tilt)
+    sun_y = math.sin(theta) * math.cos(orbit_tilt)
+    sun_z = -math.cos(theta)
+    sun_dir = normalize(np.array([sun_x, sun_y, sun_z], dtype=np.float32))
+    sun_elev_deg = math.degrees(math.asin(float(np.clip(sun_dir[1], -1.0, 1.0))))
 
-    # Direção de iluminação 3D (light_dir): mantém elevação mínima de 26°..38° para o
-    # cálculo de sombreamento (mesmo quando o disco solar visual está baixo no horizonte).
-    # Isso evita o estouro especular rasante ao olhar para o sol e ilumina o dorso/convés uniformemente.
-    light_elev_deg = 26.0 + 12.0 * t
-    light_elev_rad = math.radians(light_elev_deg)
-    lx = math.cos(light_elev_rad) * math.sin(SUN_AZIMUTH_RAD)
-    ly = math.sin(light_elev_rad)
-    lz = -math.cos(light_elev_rad) * math.cos(SUN_AZIMUTH_RAD)
-    light_dir = normalize(np.array([lx, ly, lz], dtype=np.float32))
+    # Posição da Lua (oposta ao Sol no ciclo de 24h -> ergue-se a Leste -Z ao anoitecer!)
+    moon_theta = theta - math.pi
+    moon_x = math.sin(moon_theta) * math.sin(orbit_tilt)
+    moon_y = math.sin(moon_theta) * math.cos(orbit_tilt)
+    moon_z = -math.cos(moon_theta)
+    moon_dir = normalize(np.array([moon_x, moon_y, moon_z], dtype=np.float32))
+    moon_elev_deg = math.degrees(math.asin(float(np.clip(moon_dir[1], -1.0, 1.0))))
 
-    # Direção da luz hemisférica oposta (GL_LIGHT2 - Sky Fill Light): preenche suavemente
-    # o lado de sombra quando a aeronave inclina (roll) ou gira para longe do sol.
-    fill_dir = normalize(np.array([-lx * 0.75, 0.68, -lz * 0.75], dtype=np.float32))
+    kf = _sample_day_keyframes(hour)
 
-    # Balanço equilibrado: menor contraste extremo entre luz direta e sombra
-    light_ambient = [
-        float(0.28 + 0.08 * t),
-        float(0.25 + 0.09 * t),
-        float(0.28 + 0.08 * t),
-        1.0
-    ]
-    light_diffuse = [
-        float(0.58 + 0.08 * t),
-        float(0.48 + 0.14 * t),
-        float(0.40 + 0.18 * t),
-        1.0
-    ]
-    light_specular = [
-        float(0.32 + 0.10 * t),
-        float(0.28 + 0.10 * t),
-        float(0.22 + 0.12 * t),
-        1.0
-    ]
-    fill_diffuse = [
-        float(0.24 + 0.05 * t),
-        float(0.25 + 0.06 * t),
-        float(0.30 + 0.06 * t),
-        1.0
-    ]
+    zenith_color = kf["zenith"].copy()
+    upper_sky_color = kf["upper"].copy()
+    mid_sky_color = kf["mid"].copy()
+    horizon_color = kf["horizon"].copy()
+
+    # Leve aquecimento desértico no horizonte do Cânion durante o dia/crepúsculo
+    if scene_mode == 2:
+        day_weight = float(np.clip((sun_elev_deg + 8.0) / 30.0, 0.0, 1.0))
+        horizon_color = np.clip(horizon_color + np.array([0.05, 0.01, -0.04], dtype=np.float32) * day_weight, 0.0, 1.0)
+        mid_sky_color = np.clip(mid_sky_color + np.array([0.04, 0.00, -0.04], dtype=np.float32) * day_weight, 0.0, 1.0)
+
+    # Fator de presença solar vs lunar
+    sun_visibility = float(np.clip((sun_elev_deg + 4.0) / 8.0, 0.0, 1.0))
+    moon_visibility = float(np.clip((moon_elev_deg + 3.0) / 10.0, 0.0, 1.0) * np.clip((-sun_elev_deg + 4.0) / 14.0, 0.0, 1.0))
+    is_night = (sun_elev_deg < -4.0)
+
+    # Direção de iluminação principal (GL_LIGHT0):
+    # Usa o Sol durante o dia e a Lua à noite, mantendo elevação mínima de 24°
+    # para iluminar o convés, o F-14 e os paredões do cânion sem estouro rasante.
+    active_celestial = moon_dir if is_night else sun_dir
+    act_elev = max(24.0, math.degrees(math.asin(float(np.clip(active_celestial[1], -1.0, 1.0)))))
+    horiz_len = math.hypot(float(active_celestial[0]), float(active_celestial[2]))
+    if horiz_len > 1e-4:
+        hx = float(active_celestial[0]) / horiz_len
+        hz = float(active_celestial[2]) / horiz_len
+    else:
+        hx, hz = 0.0, -1.0
+
+    act_rad = math.radians(act_elev)
+    light_dir = normalize(np.array([
+        math.cos(act_rad) * hx,
+        math.sin(act_rad),
+        math.cos(act_rad) * hz,
+    ], dtype=np.float32))
+
+    fill_dir = normalize(np.array([-light_dir[0] * 0.72, 0.68, -light_dir[2] * 0.72], dtype=np.float32))
+
+    # Brilho ambiente normalizado [0.22 à noite .. 1.0 ao meio-dia] para tintagem de partículas/poeira/spray
+    daylight_factor = float(np.clip((sun_elev_deg + 10.0) / 38.0, 0.0, 1.0))
+
+    light_ambient = [float(kf["amb"][0]), float(kf["amb"][1]), float(kf["amb"][2]), 1.0]
+    light_diffuse = [float(kf["diff"][0]), float(kf["diff"][1]), float(kf["diff"][2]), 1.0]
+    light_specular = [float(kf["spec"][0]), float(kf["spec"][1]), float(kf["spec"][2]), 1.0]
+    fill_diffuse = [float(kf["fill"][0]), float(kf["fill"][1]), float(kf["fill"][2]), 1.0]
 
     return {
+        "hour": hour,
+        "clock_str": format_clock_hhmm(hour),
+        "phase_label": get_phase_label_for_hour(hour),
+        "is_night": is_night,
+        "daylight_factor": daylight_factor,
         "dir": sun_dir,
+        "moon_dir": moon_dir,
         "light_dir": light_dir,
         "fill_dir": fill_dir,
-        "progress": t,
-        "elev_deg": elev_deg,
+        "progress": (hour / 24.0),
+        "elev_deg": sun_elev_deg,
+        "moon_elev_deg": moon_elev_deg,
+        "sun_visibility": sun_visibility,
+        "moon_visibility": moon_visibility,
+        "star_alpha": float(kf["stars"]),
         "scene_mode": scene_mode,
         "zenith_color": zenith_color,
         "upper_sky_color": upper_sky_color,
         "mid_sky_color": mid_sky_color,
         "horizon_color": horizon_color,
-        "sun_core_color": sun_core,
-        "sun_halo_color": sun_halo,
+        "sun_core_color": kf["sun_core"],
+        "sun_halo_color": kf["sun_halo"],
+        "moon_core_color": np.array([0.92, 0.95, 1.00], dtype=np.float32),
+        "moon_halo_color": np.array([0.46, 0.62, 0.90], dtype=np.float32),
+        "cloud_tint": kf["cloud"],
         "light_ambient": light_ambient,
         "light_diffuse": light_diffuse,
         "light_specular": light_specular,
@@ -290,8 +525,8 @@ def get_sun_state(sim_time, scene_mode=1):
 
 def apply_sunrise_lighting(sun_state, lighting_enabled=True):
     """
-    Atualiza a cor de fundo (glClearColor) usando a cor do zênite e configura
-    GL_LIGHT0 (Sol Direcional Suavizado) + GL_LIGHT2 (Preenchimento Celeste Hemisférico).
+    Atualiza a cor de fundo (glClearColor) e configura GL_LIGHT0 (Sol ou Lua) +
+    GL_LIGHT2 (Preenchimento Atmosférico) conforme o horário atual do ciclo Dia/Noite.
     """
     zc = sun_state["zenith_color"]
     glClearColor(float(zc[0]), float(zc[1]), float(zc[2]), 1.0)
@@ -300,6 +535,15 @@ def apply_sunrise_lighting(sun_state, lighting_enabled=True):
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
         glEnable(GL_LIGHT2)
+
+        # Ajusta luz ambiente global suavemente entre dia (0.18) e noite (0.10)
+        df = sun_state.get("daylight_factor", 0.6)
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [
+            0.09 + 0.09 * df,
+            0.10 + 0.08 * df,
+            0.15 + 0.04 * df,
+            1.0
+        ])
 
         ldir = sun_state["light_dir"]
         fdir = sun_state["fill_dir"]
@@ -320,13 +564,12 @@ def apply_sunrise_lighting(sun_state, lighting_enabled=True):
 def _compute_sky_dome_vertex_color(elev_deg, azim_sin, azim_cos, sun_state):
     """
     Calcula a cor exata (r, g, b) de um vértice da abóbada celeste esférica
-    para a elevação 'elev_deg' (-30° a +90°) e direção azimutal (azim_sin, azim_cos).
+    com espalhamento atmosférico direcional em torno do Sol (ou brilho sutil da Lua).
     """
     hc = sun_state["horizon_color"]
     mc = sun_state["mid_sky_color"]
     uc = sun_state["upper_sky_color"]
     zc = sun_state["zenith_color"]
-    sdir = sun_state["dir"]
 
     if elev_deg <= 0.0:
         t_sub = np.clip(-elev_deg / 30.0, 0.0, 1.0)
@@ -342,22 +585,60 @@ def _compute_sky_dome_vertex_color(elev_deg, azim_sin, azim_cos, sun_state):
         u_smooth = u * u * (3.0 - 2.0 * u)
         base_col = (1.0 - u_smooth) * uc + u_smooth * zc
 
-    elev_atten = max(0.0, 1.0 - max(0.0, elev_deg) / 55.0) ** 2.0
-    if elev_atten > 1e-4:
-        horiz_dot = max(0.0, azim_sin * float(sdir[0]) + (-azim_cos) * float(sdir[2]))
-        glow_boost = (horiz_dot ** 3.0) * 0.34 * elev_atten
-        r = min(1.0, float(base_col[0]) + glow_boost)
-        g = min(1.0, float(base_col[1]) + glow_boost * 0.55)
-        b = min(1.0, float(base_col[2]) + glow_boost * 0.25)
-        return r, g, b
+    r, g, b = float(base_col[0]), float(base_col[1]), float(base_col[2])
 
-    return float(base_col[0]), float(base_col[1]), float(base_col[2])
+    # Brilho de espalhamento no horizonte na direção do Sol (forte no amanhecer/pôr do sol)
+    sun_vis = sun_state.get("sun_visibility", 1.0)
+    low_sun_factor = float(np.clip(1.0 - abs(sun_state["elev_deg"]) / 42.0, 0.0, 1.0))
+    elev_atten = max(0.0, 1.0 - max(0.0, elev_deg) / 55.0) ** 2.0
+
+    if sun_vis > 0.01 and elev_atten > 1e-4:
+        sdir = sun_state["dir"]
+        horiz_dot = max(0.0, azim_sin * float(sdir[0]) + (-azim_cos) * float(sdir[2]))
+        glow_boost = (horiz_dot ** 3.0) * (0.14 + 0.28 * low_sun_factor) * elev_atten * sun_vis
+        sh = sun_state["sun_halo_color"]
+        r = min(1.0, r + glow_boost * float(sh[0]))
+        g = min(1.0, g + glow_boost * float(sh[1]) * 0.72)
+        b = min(1.0, b + glow_boost * float(sh[2]) * 0.55)
+
+    # Brilho prateado suave no horizonte na direção da Lua à noite
+    moon_vis = sun_state.get("moon_visibility", 0.0)
+    if moon_vis > 0.05 and elev_atten > 1e-4:
+        mdir = sun_state["moon_dir"]
+        m_dot = max(0.0, azim_sin * float(mdir[0]) + (-azim_cos) * float(mdir[2]))
+        m_boost = (m_dot ** 3.0) * 0.12 * elev_atten * moon_vis
+        r = min(1.0, r + m_boost * 0.60)
+        g = min(1.0, g + m_boost * 0.78)
+        b = min(1.0, b + m_boost * 1.00)
+
+    return r, g, b
+
+
+def _draw_celestial_disc(celestial_dir, halo_layers, fan_segs=26):
+    """Desenha um astro (Sol ou Lua) e suas coroas de difração a SUN_DISTANCE."""
+    pos = celestial_dir * SUN_DISTANCE
+    ref_up = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    if abs(float(celestial_dir[1])) > 0.96:
+        ref_up = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+    c_right = normalize(np.cross(celestial_dir, ref_up))
+    c_up = normalize(np.cross(c_right, celestial_dir))
+
+    for radius, center_rgba, edge_rgba in halo_layers:
+        glBegin(GL_TRIANGLE_FAN)
+        glColor4f(*center_rgba)
+        glVertex3f(float(pos[0]), float(pos[1]), float(pos[2]))
+        glColor4f(*edge_rgba)
+        for i in range(fan_segs + 1):
+            ang = (2.0 * math.pi * i) / fan_segs
+            offset = c_right * (math.cos(ang) * radius) + c_up * (math.sin(ang) * radius)
+            pt = pos + offset
+            glVertex3f(float(pt[0]), float(pt[1]), float(pt[2]))
+        glEnd()
 
 
 def _compile_sky_dome_display_list(sun_state):
     """
-    Compila a geometria da abóbada celeste e do disco solar em uma Display List.
-    Só é chamada quando o Sol se move significativamente (~a cada 0.5s) ou ao trocar de cena.
+    Compila a abóbada celeste esférica, estrelas noturnas, Sol e Lua em Display List.
     """
     if _sky_dome_cache["dlist"] is None:
         _sky_dome_cache["dlist"] = glGenLists(1)
@@ -365,11 +646,7 @@ def _compile_sky_dome_display_list(sun_state):
     dlist = _sky_dome_cache["dlist"]
     glNewList(dlist, GL_COMPILE)
 
-    sc = sun_state["sun_core_color"]
-    sh = sun_state["sun_halo_color"]
     zc = sun_state["zenith_color"]
-    sdir = sun_state["dir"]
-
     segments = 32
     lat_rings_deg = [-30.0, -10.0, 0.0, 6.0, 13.0, 22.0, 35.0, 52.0, 70.0, 83.0]
 
@@ -437,52 +714,67 @@ def _compile_sky_dome_display_list(sun_state):
         glVertex3f(r_bot_ring * sa, y_bot_ring, -r_bot_ring * ca)
     glEnd()
 
-    # 4. Disco Solar e Coroas de Difração
-    sun_pos = sdir * SUN_DISTANCE
-    up_world = np.array([0.0, 1.0, 0.0], dtype=np.float32)
-    sun_right = normalize(np.cross(sdir, up_world))
-    sun_up = normalize(np.cross(sun_right, sdir))
+    # 4. Campo Estelar (visível no crepúsculo e durante toda a noite)
+    star_alpha = sun_state.get("star_alpha", 0.0)
+    if star_alpha > 0.02:
+        glEnable(GL_POINT_SMOOTH)
+        for size_bucket in (1.4, 1.8, 2.3, 3.0):
+            glPointSize(size_bucket)
+            glBegin(GL_POINTS)
+            for sx, sy, sz, cr, cg, cb, s_sz in _SKY_STARS:
+                if abs(s_sz - size_bucket) < 0.1:
+                    glColor4f(cr, cg, cb, star_alpha)
+                    glVertex3f(sx, sy, sz)
+            glEnd()
+        glPointSize(1.0)
 
-    halo_layers = [
-        (560.0, 0.0,  [sh[0], sh[1] * 0.75, sh[2] * 0.5, 0.22]),
-        (300.0, 0.0,  [sh[0], sh[1],        sh[2],       0.38]),
-        (145.0, 0.25, [sc[0], sc[1] * 0.92, sc[2] * 0.7, 0.65]),
-        ( 76.0, 0.96, [sc[0], sc[1],        sc[2],       0.98]),
-    ]
+    # 5. Disco Solar e Coroas de Difração (durante o dia, amanhecer e pôr do sol)
+    sun_vis = sun_state.get("sun_visibility", 1.0)
+    if sun_vis > 0.01:
+        sc = sun_state["sun_core_color"]
+        sh = sun_state["sun_halo_color"]
+        sun_layers = [
+            (540.0, (float(sh[0]), float(sh[1]) * 0.78, float(sh[2]) * 0.55, 0.22 * sun_vis),
+                    (float(sh[0]), float(sh[1]) * 0.78, float(sh[2]) * 0.55, 0.0)),
+            (285.0, (float(sh[0]), float(sh[1]),        float(sh[2]),       0.38 * sun_vis),
+                    (float(sh[0]), float(sh[1]),        float(sh[2]),       0.0)),
+            (138.0, (float(sc[0]), float(sc[1]) * 0.94, float(sc[2]) * 0.75, 0.65 * sun_vis),
+                    (float(sc[0]), float(sc[1]) * 0.94, float(sc[2]) * 0.75, 0.0)),
+            ( 72.0, (1.0, 0.99, 0.94, 0.98 * sun_vis),
+                    (float(sc[0]), float(sc[1]),        float(sc[2]),       0.86 * sun_vis)),
+        ]
+        _draw_celestial_disc(sun_state["dir"], sun_layers)
 
-    fan_segs = 24
-    for radius, center_alpha_boost, rgba in halo_layers:
-        glBegin(GL_TRIANGLE_FAN)
-        if center_alpha_boost > 0.5:
-            glColor4f(1.0, 0.99, 0.92, float(rgba[3]))
-        else:
-            glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]), float(rgba[3]))
-        glVertex3f(float(sun_pos[0]), float(sun_pos[1]), float(sun_pos[2]))
-
-        edge_alpha = 0.85 if center_alpha_boost > 0.8 else 0.0
-        glColor4f(float(rgba[0]), float(rgba[1]), float(rgba[2]), edge_alpha)
-        for i in range(fan_segs + 1):
-            ang = (2.0 * math.pi * i) / fan_segs
-            offset = sun_right * (math.cos(ang) * radius) + sun_up * (math.sin(ang) * radius)
-            pt = sun_pos + offset
-            glVertex3f(float(pt[0]), float(pt[1]), float(pt[2]))
-        glEnd()
+    # 6. Lua Cheia e Halo Prateado (durante a noite e crepúsculo)
+    moon_vis = sun_state.get("moon_visibility", 0.0)
+    if moon_vis > 0.02:
+        mc = sun_state["moon_core_color"]
+        mh = sun_state["moon_halo_color"]
+        moon_layers = [
+            (380.0, (float(mh[0]), float(mh[1]), float(mh[2]), 0.16 * moon_vis),
+                    (float(mh[0]), float(mh[1]), float(mh[2]), 0.0)),
+            (180.0, (float(mh[0]) * 1.15, float(mh[1]) * 1.12, float(mh[2]), 0.28 * moon_vis),
+                    (float(mh[0]), float(mh[1]), float(mh[2]), 0.0)),
+            ( 66.0, (float(mc[0]), float(mc[1]), float(mc[2]), 0.96 * moon_vis),
+                    (0.76, 0.82, 0.92, 0.84 * moon_vis)),
+        ]
+        _draw_celestial_disc(sun_state["moon_dir"], moon_layers)
 
     glEndList()
 
 
 def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
     """
-    Renderiza a abóbada celeste esférica completa usando Display List em cache,
-    centrada em (X, Y, Z) da aeronave.
+    Renderiza a abóbada celeste esférica completa (céu, estrelas, Sol e Lua)
+    usando Display List em cache, centrada na posição da aeronave.
     """
-    # Atualiza o cache apenas quando a elevação solar muda em ~0.1 grau ou muda o cenário
-    cache_key = (scene_mode, int(round(sun_state["elev_deg"] * 10.0)))
+    # Atualiza o cache quando a hora muda em ~0.02h (~1.2 min simulado) ou ao trocar de cena
+    cache_key = (scene_mode, int(round(sun_state["hour"] * 50.0)))
     if _sky_dome_cache["last_key"] != cache_key or _sky_dome_cache["dlist"] is None:
         _compile_sky_dome_display_list(sun_state)
         _sky_dome_cache["last_key"] = cache_key
 
-    glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
+    glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT | GL_POINT_BIT)
     glDisable(GL_LIGHTING)
     glDisable(GL_TEXTURE_2D)
     glDisable(GL_DEPTH_TEST)
@@ -501,9 +793,32 @@ def draw_rising_sun_and_sky(anchor_pos, sun_state, scene_mode=1):
 
 def draw_ocean_sun_glitter(anchor_pos, sun_state, sim_time):
     """
-    Desenha a trilha de reflexo dourado do nascer do sol ('Sun Glitter Path')
-    sobre a superfície do oceano na Cena 1.
+    Desenha a trilha de reflexo cintilante do Sol (de dia/amanhecer/pôr do sol) ou
+    da Lua (à noite — brilho prateado) sobre o oceano na Cena 1.
     """
+    is_night = sun_state.get("is_night", False)
+    if is_night:
+        vis = sun_state.get("moon_visibility", 0.0)
+        cdir = sun_state["moon_dir"]
+        c_core = sun_state["moon_core_color"]
+        c_halo = sun_state["moon_halo_color"]
+        strength = 0.72 * vis
+    else:
+        vis = sun_state.get("sun_visibility", 1.0)
+        cdir = sun_state["dir"]
+        c_core = sun_state["sun_core_color"]
+        c_halo = sun_state["sun_halo_color"]
+        # Mais intenso com sol mais baixo, suave ao meio-dia
+        low_boost = 0.60 + 0.40 * float(np.clip(1.0 - sun_state["elev_deg"] / 70.0, 0.0, 1.0))
+        strength = vis * low_boost
+
+    if strength < 0.03:
+        return
+
+    horiz_len = math.hypot(float(cdir[0]), float(cdir[2]))
+    if horiz_len < 0.08:
+        return
+
     glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT)
     glDisable(GL_LIGHTING)
     glDisable(GL_TEXTURE_2D)
@@ -511,11 +826,7 @@ def draw_ocean_sun_glitter(anchor_pos, sun_state, sim_time):
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
 
-    sdir = sun_state["dir"]
-    sh = sun_state["sun_halo_color"]
-    sc = sun_state["sun_core_color"]
-
-    horiz_dir = normalize(np.array([sdir[0], 0.0, sdir[2]], dtype=np.float32))
+    horiz_dir = normalize(np.array([cdir[0], 0.0, cdir[2]], dtype=np.float32))
     perp_dir = np.array([-horiz_dir[2], 0.0, horiz_dir[0]], dtype=np.float32)
 
     base_x = float(anchor_pos[0])
@@ -535,8 +846,13 @@ def draw_ocean_sun_glitter(anchor_pos, sun_state, sim_time):
         p3 = center + perp_dir * (half_w * 0.8) + horiz_dir * depth_l
         p4 = center - perp_dir * (half_w * 0.8) + horiz_dir * depth_l
 
-        alpha = (0.12 + 0.14 * (i / float(num_strips))) * shimmer
-        glColor4f(float(sc[0]), float(0.75 * sc[1] + 0.25 * sh[1]), float(sh[2]), alpha)
+        alpha = (0.12 + 0.14 * (i / float(num_strips))) * shimmer * strength
+        glColor4f(
+            float(0.75 * c_core[0] + 0.25 * c_halo[0]),
+            float(0.75 * c_core[1] + 0.25 * c_halo[1]),
+            float(0.65 * c_core[2] + 0.35 * c_halo[2]),
+            alpha
+        )
         glVertex3f(float(p1[0]), 0.18, float(p1[2]))
         glVertex3f(float(p2[0]), 0.18, float(p2[2]))
         glVertex3f(float(p3[0]), 0.18, float(p3[2]))
@@ -547,7 +863,7 @@ def draw_ocean_sun_glitter(anchor_pos, sun_state, sim_time):
 
 
 # ==============================================================================
-# 2. NUVENS PROCEDURAIS (VAPOR SEMITRANSPARENTE COM SUPORTE PERIÓDICO)
+# 2. NUVENS PROCEDURAIS (VAPOR SEMITRANSPARENTE COM TINTAGEM DIA/NOITE)
 # ==============================================================================
 
 def create_cloud_vapor_texture():
@@ -591,7 +907,9 @@ def create_cloud_vapor_texture():
 
 def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
     """
-    Compila um banco de nuvem individual usando planos de vapor cruzados.
+    Compila um banco de nuvem individual usando tons neutros de altura (0.76..1.0)
+    para que a iluminação ambiente em draw_procedural_clouds aplique a cor exata do
+    Amanhecer, Meio-Dia, Pôr do Sol ou Noite sem recompilar a Display List.
     """
     num_wisps = 8
     for _ in range(num_wisps):
@@ -610,11 +928,11 @@ def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
 
         height_factor = (oy / max(1.0, ry)) + 0.5
         if height_factor < 0.42:
-            glColor4f(1.0, 0.74, 0.58, 0.34)
+            glColor4f(0.78, 0.76, 0.78, 0.34)
         elif height_factor < 0.72:
-            glColor4f(0.99, 0.88, 0.78, 0.38)
+            glColor4f(0.90, 0.90, 0.91, 0.38)
         else:
-            glColor4f(1.0, 0.96, 0.92, 0.42)
+            glColor4f(1.00, 1.00, 1.00, 0.42)
 
         glPushMatrix()
         glTranslatef(cx + ox, cy + oy, cz + oz)
@@ -622,6 +940,7 @@ def _draw_vapor_puff_cluster(cx, cy, cz, rx, ry, rz, rng):
         glRotatef(tilt_x, 1.0, 0.0, 0.0)
         glRotatef(tilt_z, 0.0, 0.0, 1.0)
 
+        glNormal3f(0.0, 1.0, 0.0)
         glBegin(GL_QUADS)
         glTexCoord2f(0.0, 0.0); glVertex3f(-pw, 0.0, -pl)
         glTexCoord2f(1.0, 0.0); glVertex3f( pw, 0.0, -pl)
@@ -683,15 +1002,30 @@ def build_procedural_clouds_list(scene_mode=1):
     return dlist
 
 
-def draw_procedural_clouds(clouds_dlist, cloud_tex_id, sim_time, player_pos=None, scene_mode=1):
+def draw_procedural_clouds(clouds_dlist, cloud_tex_id, sim_time, player_pos=None, scene_mode=1, sun_state=None):
     """
-    Renderiza a camada de nuvens procedurais como vapor semitransparente, repetindo
-    também nos tiles periódicos visíveis para manter continuidade no Roundabout.
+    Renderiza a camada de nuvens procedurais como vapor semitransparente, tintada em
+    hardware de acordo com o horário atual do ciclo Dia/Noite (sun_state).
     """
-    glPushAttrib(GL_ENABLE_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
-    glDisable(GL_LIGHTING)
+    glPushAttrib(GL_ENABLE_BIT | GL_LIGHTING_BIT | GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT | GL_POLYGON_BIT)
     glEnable(GL_TEXTURE_2D)
     glBindTexture(GL_TEXTURE_2D, cloud_tex_id)
+
+    # Usa GL_LIGHT_MODEL_AMBIENT (sem luzes direcionais) para multiplicar os tons neutros
+    # da Display List pela cor atmosférica da hora atual sem recompilar geometria!
+    if sun_state is not None and "cloud_tint" in sun_state:
+        ct = sun_state["cloud_tint"]
+        glEnable(GL_LIGHTING)
+        glDisable(GL_LIGHT0)
+        glDisable(GL_LIGHT1)
+        glDisable(GL_LIGHT2)
+        glEnable(GL_COLOR_MATERIAL)
+        glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
+        glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.0, 0.0, 0.0, 1.0])
+        glMaterialfv(GL_FRONT_AND_BACK, GL_EMISSION, [0.0, 0.0, 0.0, 1.0])
+        glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [float(ct[0]), float(ct[1]), float(ct[2]), 1.0])
+    else:
+        glDisable(GL_LIGHTING)
 
     glEnable(GL_DEPTH_TEST)
     glDepthMask(GL_FALSE)

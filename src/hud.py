@@ -191,7 +191,7 @@ def _compute_gps_strings(aircraft, scene_mode):
     return to_dms(lat, "N", "S"), to_dms(lon, "W", "E")
 
 
-def _draw_compass_and_gps(width, height, aircraft, scene_mode):
+def _draw_compass_and_gps(width, height, aircraft, scene_mode, sun_state=None, day_cycle_paused=False):
     """
     Desenha a Bússola Tática deslizante (Heading Tape) no topo central da tela
     e o painel de coordenadas GPS / Seletor de Cenários F1/F2/F3.
@@ -257,10 +257,11 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     glColor4f(0.40, 1.0, 0.58, 1.0)
     draw_vector_text(f"HDG {int(round(hdg)) % 360:03d}°", cx, tape_y - 31.0, scale=9.5, align="center")
 
+    show_time_row = (scene_mode in (1, 2)) and (sun_state is not None)
     gps_x1 = width - 22.0
-    gps_x0 = gps_x1 - 246.0
+    gps_x0 = gps_x1 - (272.0 if show_time_row else 246.0)
     gps_y1 = height - 18.0
-    gps_y0 = gps_y1 - 46.0
+    gps_y0 = gps_y1 - (64.0 if show_time_row else 46.0)
     _draw_hud_panel_box(gps_x0, gps_y0, gps_x1, gps_y1, cut=5.0)
 
     if scene_mode == 1:
@@ -272,7 +273,23 @@ def _draw_compass_and_gps(width, height, aircraft, scene_mode):
     glColor4f(0.25, 1.0, 0.48, 0.95)
     draw_vector_text(sector_name, gps_x0 + 10.0, gps_y1 - 17.0, scale=8.0, align="left")
     glColor4f(0.65, 1.0, 0.78, 0.90)
-    draw_vector_text(f"GPS {lat_str} {lon_str}", gps_x0 + 10.0, gps_y0 + 8.0, scale=7.8, align="left")
+    gps_row_y = (gps_y1 - 36.0) if show_time_row else (gps_y0 + 8.0)
+    draw_vector_text(f"GPS {lat_str} {lon_str}", gps_x0 + 10.0, gps_row_y, scale=7.8, align="left")
+
+    if show_time_row:
+        clock_str = sun_state.get("clock_str", "06:25")
+        phase_lbl = sun_state.get("phase_label", "AMANHECER")
+        cycle_tag = "FIXO" if day_cycle_paused else "AUTO"
+        if sun_state.get("is_night", False):
+            glColor4f(0.55, 0.80, 1.00, 0.96)
+        elif phase_lbl in ("AMANHECER", "POR DO SOL"):
+            glColor4f(1.00, 0.74, 0.34, 0.96)
+        else:
+            glColor4f(0.42, 0.96, 1.00, 0.96)
+        draw_vector_text(
+            f"[C] {clock_str} {phase_lbl} [V:{cycle_tag}]",
+            gps_x0 + 10.0, gps_y0 + 8.0, scale=7.4, align="left"
+        )
 
 
 def _draw_artificial_horizon(width, height, aircraft, camera_mode):
@@ -811,7 +828,7 @@ def _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)
 # 4. FUNÇÃO PRINCIPAL DO HUD E OVERLAY DE COLISÃO (GAME OVER)
 # ==============================================================================
 
-def draw_flight_hud(width, height, aircraft, camera_mode=1, scene_mode=1, sim_time=0.0):
+def draw_flight_hud(width, height, aircraft, camera_mode=1, scene_mode=1, sim_time=0.0, sun_state=None, day_cycle_paused=False):
     """
     Renderiza o Head-Up Display (HUD) integrado em todas as câmeras (1, 2 e 3),
     consolidando toda a telemetria da aeronave na tela com estética militar limpa.
@@ -835,7 +852,7 @@ def draw_flight_hud(width, height, aircraft, camera_mode=1, scene_mode=1, sim_ti
     glEnable(GL_LINE_SMOOTH)
 
     _draw_g_force_vignette(width, height, aircraft, scene_mode)
-    _draw_compass_and_gps(width, height, aircraft, scene_mode)
+    _draw_compass_and_gps(width, height, aircraft, scene_mode, sun_state=sun_state, day_cycle_paused=day_cycle_paused)
     _draw_artificial_horizon(width, height, aircraft, camera_mode)
     _draw_speed_and_altitude_tapes(width, height, aircraft)
     _draw_bottom_telemetry_panels(width, height, aircraft, scene_mode, sim_time)

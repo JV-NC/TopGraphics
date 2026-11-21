@@ -51,7 +51,7 @@ SCENE1_HALF_PERIOD = 2400.0
 # ==============================================================================
 
 def _create_procedural_ocean_texture():
-    """Fallback procedural 128x128 caso 'assets/texture/ocean_water.png' não seja encontrado."""
+    """Fallback procedural 128x128 caso 'assets/ocean_water.png' não seja encontrado."""
     size = 128
     img = np.zeros((size, size, 3), dtype=np.uint8)
     for y in range(size):
@@ -73,7 +73,7 @@ def _create_procedural_ocean_texture():
 
 def create_ocean_texture():
     """
-    Carrega a textura 'assets/texture/ocean_water.png' (convertendo automaticamente a faixa
+    Carrega a textura 'assets/ocean_water.png' (convertendo automaticamente a faixa
     de ondas monocromática para azul-oceânico naval com mipmaps e repetição espelhada).
     """
     return load_texture_from_assets(
@@ -676,10 +676,10 @@ class OceanPhysicsSystem:
                 glVertex3f(pt[0], pt[1], pt[2])
         glEnd()
 
-    def _draw_hydrodynamic_particles(self):
+    def _draw_hydrodynamic_particles(self, sun_state=None):
         """
         Renderiza as partículas hidrodinâmicas livres (Spray, Espuma, Bow Wave e Rooster Tail)
-        usando billboards orientados à câmera e blending suave.
+        usando billboards orientados à câmera, blending suave e tintagem do ciclo Dia/Noite.
         """
         alive_idx = np.where(self.p_life > 0.0)[0]
         n_alive = len(alive_idx)
@@ -716,10 +716,18 @@ class OceanPhysicsSystem:
         qv[2::4] = pos + rx + uy
         qv[3::4] = pos - rx + uy
 
+        if sun_state is not None and "cloud_tint" in sun_state:
+            ct = sun_state["cloud_tint"]
+            sp_r = float(np.clip(0.92 * (0.28 + 0.72 * ct[0]), 0.25, 1.0))
+            sp_g = float(np.clip(0.97 * (0.28 + 0.72 * ct[1]), 0.30, 1.0))
+            sp_b = float(np.clip(1.00 * (0.34 + 0.66 * ct[2]), 0.42, 1.0))
+        else:
+            sp_r, sp_g, sp_b = 0.92, 0.97, 1.00
+
         qc = self.quad_colors[:total_v]
-        qc[:, 0] = 0.92
-        qc[:, 1] = 0.97
-        qc[:, 2] = 1.00
+        qc[:, 0] = sp_r
+        qc[:, 1] = sp_g
+        qc[:, 2] = sp_b
         qc[0::4, 3] = alpha
         qc[1::4, 3] = alpha
         qc[2::4, 3] = alpha
@@ -749,7 +757,7 @@ class OceanPhysicsSystem:
         glDepthMask(GL_TRUE)
         glPopAttrib()
 
-    def draw(self, aircraft, ocean_tex_id, lighting_enabled=True, textures_enabled=True, wireframe_mode=False):
+    def draw(self, aircraft, ocean_tex_id, lighting_enabled=True, textures_enabled=True, wireframe_mode=False, sun_state=None):
         """
         Renderiza a superfície física do corpo d'água (malha de partículas 96x96 + saia
         de horizonte) e o sistema de partículas hidrodinâmicas livres (spray e espuma).
@@ -798,7 +806,7 @@ class OceanPhysicsSystem:
 
         # 3. Sistema de Partículas Livres 3D (Spray, Espuma, Esteira e Rooster Tail)
         if not wireframe_mode:
-            self._draw_hydrodynamic_particles()
+            self._draw_hydrodynamic_particles(sun_state=sun_state)
 
         glPopAttrib()
 
@@ -838,7 +846,7 @@ def update_ocean_physics(dt, aircraft, sim_time):
     get_ocean_system().update(float(dt), aircraft, float(sim_time))
 
 
-def draw_physical_ocean(aircraft, ocean_tex_id, sim_time, lighting_enabled=True, textures_enabled=True, wireframe_mode=False):
+def draw_physical_ocean(aircraft, ocean_tex_id, sim_time, lighting_enabled=True, textures_enabled=True, wireframe_mode=False, sun_state=None):
     """Renderiza o corpo d'água físico completo e suas partículas hidrodinâmicas."""
     sys_inst = get_ocean_system()
     if abs(sys_inst.sim_time - sim_time) > 1e-4 and sys_inst.sim_time == 0.0:
@@ -849,6 +857,7 @@ def draw_physical_ocean(aircraft, ocean_tex_id, sim_time, lighting_enabled=True,
         lighting_enabled=lighting_enabled,
         textures_enabled=textures_enabled,
         wireframe_mode=wireframe_mode,
+        sun_state=sun_state,
     )
 
 
