@@ -7,6 +7,7 @@ Utilitários de renderização 3D compartilhados: carregamento de texturas de 'a
 """
 
 import os
+import sys
 import math
 
 import numpy as np
@@ -56,24 +57,35 @@ def upload_texture_rgb(img, mirrored_repeat=True, use_mipmaps=True):
 def _resolve_asset_path(filename):
     """
     Localiza um arquivo de textura dentro do diretório 'assets/texture/' independentemente
-    de o script ter sido executado da raiz do projeto ou de dentro de 'src/'.
+    de o script ter sido executado da raiz, de dentro de 'src/' ou empacotado via PyInstaller
+    (suporte automático a sys._MEIPASS e ao diretório do executável compilado).
     Também procura automaticamente por extensões alternativas (.jpg, .jpeg, .png, .bmp, .webp).
     """
+    base_roots = []
+    if getattr(sys, "frozen", False):
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        base_roots.append(exe_dir)
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            base_roots.append(meipass)
+
     module_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(module_dir)
+    base_roots.extend([project_root, module_dir, os.getcwd()])
 
-    search_dirs = [
-        os.path.join(project_root, "assets/texture"),
-        os.path.join(module_dir, "assets/texture"),
-        os.path.join(os.getcwd(), "assets/texture"),
-        project_root,
-        module_dir,
-        os.getcwd(),
-    ]
+    search_dirs = []
+    for root in base_roots:
+        for sub in (os.path.join("assets", "texture"), "assets"):
+            d = os.path.join(root, sub)
+            if d not in search_dirs:
+                search_dirs.append(d)
+    for root in base_roots:
+        if root not in search_dirs:
+            search_dirs.append(root)
 
     stem, ext = os.path.splitext(filename)
     candidate_names = [filename]
-    for alt_ext in (".jpg", ".jpeg", ".png", ".bmp", ".webp"):
+    for alt_ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
         if alt_ext.lower() != ext.lower():
             candidate_names.append(stem + alt_ext)
 
@@ -170,6 +182,34 @@ def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_siz
 
     default_img = np.full((64, 64, 3), 180, dtype=np.uint8)
     return upload_texture_rgb(default_img)
+
+
+
+def load_window_icon_images(filename="icon.png", sizes=(16, 32, 48, 64, 128)):
+    """
+    Carrega o ícone da janela (ex: 'assets/icon.png' ou 'assets/texture/icon.png')
+    e gera uma lista de imagens PIL RGBA redimensionadas com LANCZOS para uso em
+    glfw.set_window_icon(), evitando rejeição em X11 (_NET_WM_ICON) por tamanho
+    excessivo e garantindo nitidez na barra de título, Alt+Tab e barra de tarefas.
+    """
+    if not PIL_AVAILABLE:
+        return []
+
+    icon_path = _resolve_asset_path(filename)
+    if icon_path is None:
+        # Fallback opcional caso apenas icon.ico esteja presente em assets/
+        icon_path = _resolve_asset_path("icon.ico")
+    if icon_path is None:
+        return []
+
+    try:
+        resample_filter = getattr(Image, "Resampling", Image).LANCZOS
+        with Image.open(icon_path) as im:
+            base_rgba = im.convert("RGBA")
+            return [base_rgba.resize((s, s), resample_filter) for s in sizes]
+    except Exception as exc:
+        print(f"[Janela] Aviso ao carregar ícone '{filename}': {exc}")
+        return []
 
 
 # ==============================================================================

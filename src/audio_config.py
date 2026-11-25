@@ -545,13 +545,13 @@ CLIP_CONFIG = {
     # para inicialização instantânea e baixo consumo de RAM.
     # --------------------------------------------------------------------------
     "ambience_scene1_ocean": {
-        "path": "assets/audio/ambience/scene1.wav",
+        "path": "assets/audio/ambience/scene1.mp3",
         "category": "ambience",
         "start_sec": 2.0, "end_sec": 47.0,
         "loop": True, "volume": 1.40, "speed": 1.0,   # Compensa RMS de -36.1 dBFS
     },
     "ambience_scene2_canyon": {
-        "path": "assets/audio/ambience/scene2.wav",
+        "path": "assets/audio/ambience/scene2.mp3",
         "category": "ambience",
         "start_sec": 2.0, "end_sec": 47.0,
         "loop": True, "volume": 0.52, "speed": 1.0,   # Compensa RMS forte de -21.1 dBFS
@@ -564,7 +564,7 @@ CLIP_CONFIG = {
         "path": "assets/audio/music/flight.mp3",
         "category": "music",
         "start_sec": None, "end_sec": None,
-        "loop": True, "volume": 0.75, "speed": 1.0,
+        "loop": True, "volume": 1.0, "speed": 1.0,
         "optional": True,
     },
     "music_menu_inspection": {

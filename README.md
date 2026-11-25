@@ -1,6 +1,17 @@
 # TopGraphics
 ### Log TODO
 #### Done
+# 1. Instalar o PyInstaller na .venv (apenas na primeira vez)
+make install-build
+
+# 2. Compilar e empacotar para GitHub Releases (modo pasta --onedir, abre instantaneamente)
+make build VERSION=v1.0.0
+
+# Alternativa: executável único portátil (--onefile)
+make build-onefile VERSION=v1.0.0
+
+# Se quiser testar vendo os prints de log/áudio/gamepad no terminal:
+make build-debug
 * TODO: remove Wingman / Iceman to simplify the project
 * TODO: implement retractable landing gear
 * TODO: allow the fighter jet to remain stationary (throttle 0) while on the ground

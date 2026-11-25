@@ -1,0 +1,90 @@
+# ==============================================================================
+# Top Graphics | .github/workflows/release.yml
+# Compila automaticamente executáveis Windows (.exe/.zip) e Linux (.tar.gz)
+# e publica na aba Releases do GitHub ao enviar uma tag (ex: git tag v1.0.0)
+# ou ao disparar manualmente pela aba Actions do repositório.
+# ==============================================================================
+
+name: Build & Publish Top Graphics Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versão do pacote (ex: v1.0.0)"
+        required: false
+        default: "dev"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.os_label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os_label: Linux-x64
+          - runner: windows-latest
+            os_label: Windows-x64
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Instalar bibliotecas de sistema (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libglu1-mesa-dev libportaudio2 libsndfile1 libxinerama1 libxcursor1 libxi6
+
+      - name: Instalar dependências Python e PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Compilar executável e gerar pacote de release
+        shell: bash
+        run: |
+          TAG_NAME="${GITHUB_REF_NAME}"
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ github.event.inputs.version }}"
+          fi
+          python build_release.py --version "${TAG_NAME}"
+
+      - name: Enviar artefato do build
+        uses: actions/upload-artifact@v4
+        with:
+          name: TopGraphics-${{ matrix.os_label }}
+          path: release/*
+
+  publish-release:
+    name: Publicar no GitHub Releases
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar pacotes compilados (Windows e Linux)
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Criar/Atualizar GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-artifacts/*

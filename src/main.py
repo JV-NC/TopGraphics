@@ -70,7 +70,7 @@ from scene_utils import (
     draw_procedural_clouds,
     draw_periodic_scene,
 )
-from renderer_utils import setup_lighting
+from renderer_utils import setup_lighting, load_window_icon_images
 from hud import draw_flight_hud, draw_crash_overlay
 
 
@@ -384,7 +384,33 @@ class TopGraphicsApp:
     def scroll_callback(self, window, xoffset, yoffset):
         self.camera.on_scroll(yoffset)
 
+    def _configure_windows_app_id(self):
+        """Define AppUserModelID no Windows para exibir o ícone próprio na barra de tarefas."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "cefetmg.topgraphics.f14tomcat"
+                )
+            except Exception:
+                pass
+
+    def _apply_window_icon(self, window):
+        """Aplica o ícone personalizado (assets/icon.png) na janela GLFW (Windows e Linux)."""
+        icon_images = load_window_icon_images("icon.png")
+        if not icon_images:
+            return
+        try:
+            glfw.set_window_icon(window, len(icon_images), icon_images)
+        except Exception:
+            try:
+                glfw.set_window_icon(window, 1, icon_images[-1])
+            except Exception as exc:
+                print(f"[Janela] Aviso ao aplicar ícone personalizado: {exc}")
+
     def run(self):
+        self._configure_windows_app_id()
+
         if not glfw.init():
             print("Falha ao inicializar o GLFW.")
             return
@@ -399,6 +425,7 @@ class TopGraphicsApp:
             return
 
         self.window = window
+        self._apply_window_icon(window)
         glfw.make_context_current(window)
         glfw.swap_interval(1)
 

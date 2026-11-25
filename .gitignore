@@ -2,5 +2,8 @@
 .vscode
 src/__pycache__
 proposta_top_graphics.md
-assets/audio/ambience
-assets/audio/music
+assets/audio/ambience/*.wav
+release
+dist
+build
+*.spec
