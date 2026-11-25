@@ -1,14 +1,14 @@
 # Créditos e licenças de áudio — TOP GRAPHICS
 
-Este documento registra as fontes dos efeitos sonoros e das trilhas musicais utilizados no **TOP GRAPHICS — Simulador de Voo 3D (F-14 Tomcat)**, bem como as condições de uso conhecidas na data da última revisão.
+Este documento registra as fontes dos efeitos sonoros, ambientes e trilhas musicais efetivamente utilizados no **TOP GRAPHICS — Simulador de Voo 3D (F-14 Tomcat)**, bem como as condições de uso e cuidados de distribuição conhecidos na data da última revisão.
 
-> **Última verificação das páginas de licença: 15 de novembro de 2026.**
+> **Última atualização:** `25 de novembro de 2026`.
 >
-> Este documento é um registro de proveniência e uma orientação de conformidade para o projeto; não substitui os contratos/licenças originais nem constitui aconselhamento jurídico. A licença aplicável é a versão aceita na data do download de cada recurso. Guarde cópias das licenças, páginas dos arquivos e comprovantes de download.
+> Este documento é um registro de proveniência e uma orientação de conformidade para o projeto acadêmico; não substitui os contratos/licenças originais nem constitui aconselhamento jurídico. A licença aplicável é a versão vigente na data do download de cada recurso. Guarde cópias das licenças, páginas dos arquivos e comprovantes de download.
 
 ---
 
-## 1. Efeitos sonoros — Sonniss #GameAudioGDC 2026
+## 1. Sons ambientes — Sonniss #GameAudioGDC 2026
 
 **Origem:** [Sonniss — GDC 2026 Game Audio Bundle](https://gdc.sonniss.com/)  
 **Licença:** [#GameAudioGDC Bundle License](https://sonniss.com/gdc-bundle-license/)  
@@ -16,145 +16,111 @@ Este documento registra as fontes dos efeitos sonoros e das trilhas musicais uti
 
 ### Arquivos utilizados
 
-| Arquivo | Biblioteca de origem indicada no pacote | Uso no TOP GRAPHICS |
-|---|---|---|
-| `WATRWave_Soft Waves Cliffs_JSE_RCoN_Stereo.wav` | `Rocky Coast of Norway` (identificação `JSE_RCoN` no nome do arquivo) | Ambiente de ondas para a cena do porta-aviões/oceano |
-| `WINDDsgn_EXT, Eye Of The Storm_344 Audio_Extreme Winds Vol 1.wav` | `Extreme Winds Vol. 1` — 344 Audio | Ambiente de vento para a cena do cânion |
+| Arquivo no projeto | Arquivo original no bundle | Biblioteca de origem | Uso no TOP GRAPHICS |
+|---|---|---|---|
+| `assets/audio/ambience/scene1.mp3` | `WATRWave_Soft Waves Cliffs_JSE_RCoN_Stereo.wav` | `Rocky Coast of Norway` (`JSE_RCoN`) | Ambiente de ondas marítimas na Cena 1 (Oceano / Porta-Aviões CVN-65) |
+| `assets/audio/ambience/scene2.mp3` | `WINDDsgn_EXT, Eye Of The Storm_344 Audio_Extreme Winds Vol 1.wav` | `Extreme Winds Vol. 1` — 344 Audio | Ambiente de ventos intensos na Cena 2 (Cânion Procedural) |
+
+*(Os arquivos originais `.wav` de alta taxa de amostragem foram mantidos fora do controle de versão via `.gitignore` e convertidos para `.mp3` com janela de loop estável para otimização de tamanho e inicialização do simulador.)*
 
 ### Condições relevantes da licença Sonniss
 
-A licença publicada para o bundle concede uma licença mundial, não exclusiva e livre de royalties. A versão 2.0 está indicada como vigente a partir de **27 de agosto de 2026**. Entre as permissões e restrições relevantes para este projeto:
+A licença publicada para o bundle concede licença mundial, não exclusiva e livre de royalties (versão 2.0 vigente a partir de **27 de agosto de 2026**; versão 1.0 vigente de 28/01/2024 a 26/08/2026):
 
 - Permite usar e modificar os efeitos em projetos pessoais e comerciais, sem obrigação de atribuição ao criador original.
-- Permite sincronizar os efeitos com projetos audiovisuais e interativos, incluindo jogos, aplicações e projetos multimídia.
-- Permite compartilhar os efeitos com integrantes da própria equipe/organização que estejam trabalhando no projeto.
-- **Não permite distribuir, publicar, sublicenciar ou fornecer os efeitos como arquivos de áudio** a terceiros sem autorização prévia e escrita da Sonniss. A restrição também abrange sons modificados ou redesenhados e sua inclusão em bibliotecas, pacotes de assets, templates ou SDKs.
-- O projeto finalizado pode ser compartilhado/publicado normalmente quando os sons estiverem incorporados e sincronizados ao projeto, e não sendo fornecidos como efeitos sonoros independentes.
-- A licença proíbe utilizar os efeitos para treinamento ou desenvolvimento de tecnologias de inteligência artificial.
-- Os direitos autorais dos sons continuam pertencendo aos respectivos titulares; a licença concede somente os direitos de uso nela descritos.
-
-A atribuição não é obrigatória pela licença, mas os arquivos são listados aqui para manter a rastreabilidade dos recursos utilizados.
-
-**Atenção à versão da licença:** a Sonniss informa que a versão aplicável é a que estava publicada na data do download. A versão 1.0 esteve em vigor de 28 de janeiro de 2024 até 26 de agosto de 2026; a versão 2.0 entrou em vigor em 27 de agosto de 2026. Confirmar a data efetiva de download do bundle e arquivar a versão correspondente.
+- Permite sincronizar os efeitos com projetos audiovisuais e interativos (jogos, simuladores e aplicações multimídia).
+- Permite compartilhar os efeitos com integrantes da equipe envolvidos no projeto.
+- **Não permite distribuir, publicar, sublicenciar ou fornecer os efeitos como arquivos de áudio independentes (*standalone*)** a terceiros sem autorização prévia e escrita da Sonniss (inclusive versões modificadas ou convertidas).
+- O projeto finalizado pode ser compartilhado quando os sons estiverem incorporados e sincronizados ao programa, não sendo ofertados como banco de áudio isolado.
+- Proíbe o uso dos efeitos para treinamento ou desenvolvimento de tecnologias de inteligência artificial.
 
 ---
 
-## 2. Efeitos sonoros — FS2004 Grumman F-14 Tomcat Sound Pack
+## 2. Efeitos sonoros da aeronave — FS2004 Grumman F-14 Tomcat Sound Pack
 
 **Pacote:** `FS2004 Grumman F-14 Tomcat Sound Pack` (`f14ge110.zip`)  
 **Página de origem:** [Fly Away Simulation — FS2004 Grumman F-14 Tomcat Sound Pack](https://flyawaysimulation.com/downloads/files/2910/fs2004-grumman-f-14-tomcat-sound-pack/)  
 **Termos da plataforma:** [Fly Away Simulation — Terms of Use & Privacy Policy](https://flyawaysimulation.com/terms-privacy/)
 
-A página do pacote informa que os **sons dos motores foram gravados e editados por Christoffer Petersen**, juntamente com outros sons. O arquivo `Sound.cfg` incluído no pacote também contém um cabeçalho atribuído a Christoffer Petersen. A página lista o pacote como freeware e identifica o arquivo ZIP como `f14ge110.zip`.
+A página do pacote informa que os **sons dos motores foram gravados e editados por Christoffer Petersen**, juntamente com outros efeitos de cabine e mecânica (também referenciados no cabeçalho do `Sound.cfg` original).
 
-### Recursos aproveitados/previstos no TOP GRAPHICS
+### Recursos ativos no TOP GRAPHICS (`assets/audio/aircraft/`)
 
-O pacote contém, entre outros, os seguintes arquivos (nomes conforme listagem da página; conferir os arquivos realmente extraídos):
+| Subpasta | Arquivos ativos no mixer (`audio_config.py`) | Uso no TOP GRAPHICS |
+|---|---|---|
+| `interior/` | `A_f14_0.wav`–`A_f14_3.wav`, `B_f14_0.wav`–`B_f14_3.wav`, `A_COMB_1.wav`–`A_COMB_4.wav`, `B_COMB_1.wav`–`B_COMB_4.wav`, `A_EFSC.wav`, `B_EFSC.wav` | Motores 1 e 2 (*Jet Whine*, *Combustion* e *Afterburner* `EFSC`) na perspectiva interna (Câmera 2 — Cockpit) |
+| `exterior/` | `X_A_f14_0.wav`–`X_A_f14_3.wav`, `X_B_f14_0.wav`–`X_B_f14_3.wav`, `X_A_COMB_1.wav`–`X_A_COMB_4.WAV`, `X_B_COMB_1.wav`–`X_B_COMB_4.WAV`, `X_A_EFSC.wav`, `X_B_EFSC.wav` | Motores 1 e 2 e *Afterburner* na perspectiva externa (Câmeras 1 e 3) |
+| `events/` | `T_f14_START.wav`, `X_T_f14_START.wav`, `T_COMB_START.wav`, `X_T_COMB_START.wav`, `T_COMB_SHUT.wav`, `X_T_f14_SHUT.wav` | Partida, ignição de combustão e corte de turbina (recortados e filtrados em passa-baixas) |
+| `events/` | `GEARDOWN.wav`, `GEARUP.wav` | Acionamento e recolhimento do trem de pouso retrátil (concatenados com *Time-Stretch OLA* para `1.22 s`) |
+| `events/` | `FLAPS.wav` | Atuador hidráulico dos **Trailing-Edge Flaps** (`speed=1.0`) e reaproveitado em canal independente (`speed=1.18`) para os **Split Air Brakes** |
+| `events/` | `touchc.wav`, `roll2.wav` | Contato das rodas no pouso (*touchdown*) e rolagem sobre o convés do CVN-65 (*ground roll*) |
 
-- **Motores — perspectiva interna:** `A_f14_0.wav` a `A_f14_3.wav`, `B_f14_0.wav` a `B_f14_3.wav`, `A_COMB_1.wav` a `A_COMB_4.wav`, `B_COMB_1.wav` a `B_COMB_4.wav`, `A_EFSC.wav` e `B_EFSC.wav`.
-- **Motores — perspectiva externa:** versões correspondentes com prefixo `X_`, incluindo `X_A_f14_*`, `X_B_f14_*`, `X_A_COMB_*`, `X_B_COMB_*`, `X_A_EFSC.wav` e `X_B_EFSC.wav`.
-- **Partida e desligamento:** `T_f14_START.wav`, `T_COMB_START.wav`, `T_COMB_SHUT.wav` e versões externas `X_T_f14_START.wav`, `X_T_COMB_START.wav` e `X_T_f14_SHUT.wav`.
-- **Controles e voo:** `FLAPS.wav`, `GEARDOWN.wav`, `gearup.wav`, `NEWWIND.WAV`, `wind.wav`, `roll1.wav` e `roll2.wav`.
-- **Contato com o solo:** `touchl.wav`, `touchc.wav` e `touchr.wav`.
+### Crédito e observação de licenciamento
 
-A relação acima documenta a composição divulgada do pacote; não significa que todos os arquivos já estejam ativos na versão atual do simulador.
-
-### Crédito
-
-- **Pacote:** FS2004 Grumman F-14 Tomcat Sound Pack (`f14ge110.zip`), disponibilizado pela Fly Away Simulation.
-- **Sons dos motores:** gravados e editados por **Christoffer Petersen**, conforme crédito exibido na página do pacote.
-- **Demais efeitos incluídos:** a página informa que há outros sons, mas não identifica individualmente seus autores. Consultar o `read me.txt`, `flyawaysimulation.txt` e eventuais avisos/licenças presentes no arquivo original antes de atribuir autoria ou definir a permissão de uso de cada efeito.
-
-### Situação da licença — confirmação necessária
-
-**Não tratar a indicação “Freeware” como uma licença aberta ou como autorização automática para redistribuir os WAVs.** Os termos atuais da Fly Away Simulation esclarecem que:
-
-- O acesso ao site concede uma licença pessoal, não exclusiva e revogável para baixar arquivos para uso próprio e não comercial em simulação de voo, sujeita às condições do desenvolvedor de cada arquivo.
-- Cada arquivo freeware está sujeito à licença própria do desenvolvedor e às notas existentes na página ou dentro do arquivo; devem ser respeitadas, em especial, as restrições de uso comercial e redistribuição.
-- A plataforma informa que o copyright dos arquivos normalmente permanece com o desenvolvedor indicado e que o fato de um arquivo estar hospedado no site não transfere o copyright à Fly Away Simulation.
-- A página do pacote recomenda consultar o `readme` incluído, que é a referência específica para as instruções e condições daquele arquivo.
-
-Com as informações públicas consultadas, **não foi possível confirmar uma autorização expressa para redistribuir os sons desse pacote junto ao TOP GRAPHICS, publicar os WAVs em um repositório público ou sublicenciá-los**. O uso local no desenvolvimento não deve ser confundido com autorização para distribuição pública.
-
-**Providências antes de publicar ou distribuir o projeto:**
-
-1. Conferir integralmente o `read me.txt` e o `flyawaysimulation.txt` do ZIP original e guardar cópias no registro interno de licenças.
-2. Verificar se esses arquivos identificam uma licença específica, restrições de modificação/sincronização ou condições adicionais para os sons de terceiros.
-3. Se não houver autorização clara para incorporar e distribuir os sons em outro simulador, solicitar autorização escrita ao titular dos direitos — começando pelo contato do desenvolvedor informado no material original — explicando que os áudios serão editados/recortados, sincronizados ao TOP GRAPHICS e eventualmente incluídos em uma distribuição acadêmica do programa.
-4. Até obter confirmação, manter esses WAVs fora de repositórios públicos e de pacotes distribuídos a terceiros. Se necessário, manter os arquivos apenas no ambiente local de desenvolvimento e preparar uma versão distribuível sem esses recursos.
-
-A atribuição de crédito é mantida por transparência, mas **crédito não substitui autorização de uso ou redistribuição**.
+- **Crédito:** Pacote `FS2004 Grumman F-14 Tomcat Sound Pack` (`f14ge110.zip`), disponibilizado via Fly Away Simulation; sons dos motores gravados e editados por **Christoffer Petersen**.
+- **Atenção sobre "Freeware":** Os termos da Fly Away Simulation estabelecem que cada arquivo *freeware* permanece sujeito aos direitos autorais e restrições do respectivo autor (especialmente quanto a uso comercial e redistribuição). Antes de qualquer distribuição comercial ou pública fora do escopo acadêmico, consulte integralmente os arquivos `read me.txt` e `flyawaysimulation.txt` do pacote original e, se necessário, obtenha autorização expressa do titular.
 
 ---
 
-## 3. Trilha sonora — placeholders e possíveis faixas Pixabay
+## 3. Efeitos sonoros de colisões e interface — Pixabay
 
-**Status atual:** as trilhas sonoras estão representadas por placeholders. Nenhuma faixa específica do Pixabay está registrada como recurso efetivamente utilizado nesta versão.
+**Fonte:** [Pixabay Sound Effects](https://pixabay.com/sound-effects/)  
+**Licença:** [Pixabay Content License — Terms of Service](https://pixabay.com/service/terms/) e [Resumo da Licença](https://pixabay.com/service/license-summary/).
 
-**Fonte planejada:** [Pixabay Music — Cinematic](https://pixabay.com/music/search/cinematic/) e outras categorias da biblioteca, conforme a necessidade de cada cena.  
-**Licença:** [Pixabay Content License — Terms of Service](https://pixabay.com/service/terms/) e [resumo da licença](https://pixabay.com/service/license-summary/).
+### Arquivos utilizados
 
-### Organização musical prevista
-
-| Contexto | Trilha prevista | Status |
-|---|---|---|
-| Menu principal (a implementar) e cena de inspeção/hangar | Trilha cinematográfica/ambiente mais contemplativa | Placeholder — faixa ainda não selecionada |
-| Cena de voo 1 — porta-aviões/oceano | Trilha de voo | Placeholder — faixa ainda não selecionada |
-| Cena de voo 2 — cânion | Trilha de voo | Placeholder — faixa ainda não selecionada |
-
-A ideia é utilizar uma trilha compartilhada entre os dois cenários de voo e outra para o menu principal e a cena de inspeção, com controle de volume e transição conforme a mudança de estado/cena.
+| Arquivo no projeto | Título na fonte | Página individual | Uso no TOP GRAPHICS |
+|---|---|---|---|
+| `assets/audio/aircraft/events/boom_crash.wav` | Horror Boom Crash | [Pixabay — 487664](https://pixabay.com/sound-effects/horror-boom-crash-487664/) | Impacto/explosão em colisões sólidas (navio, convés, cânion, rochas, bunker) e base grave em colisões aquáticas |
+| `assets/audio/aircraft/events/water_splash.wav` | Nature Water Splash Effect | [Pixabay — 443133](https://pixabay.com/sound-effects/nature-water-splash-effect-443133/) | Camada simultânea de *splash* em colisões com as ondas físicas do oceano (Cena 1) |
+| `assets/audio/menu/menu1.wav` | Menu Click | [Pixabay — 147357](https://pixabay.com/sound-effects/film-special-effects-menu-click-147357/) | Confirmação/seleção de opção nos menus (`MENU_SFX_MAP["select"]`) |
+| `assets/audio/menu/menu2.wav` | UI Sound | [Pixabay — 374228](https://pixabay.com/sound-effects/film-special-effects-ui-sound-374228/) | Navegação entre itens e ajuste de sliders de volume (`MENU_SFX_MAP["move"]`) |
+| `assets/audio/menu/menu3.wav` | UI Close SFX | [Pixabay — 513359](https://pixabay.com/sound-effects/technology-ui-close-sfx-513359/) | Abertura e fechamento do Menu de Pause (`MENU_SFX_MAP["pause"]`) |
 
 ### Condições relevantes da licença Pixabay
 
-Na versão dos termos consultada em **15 de novembro de 2026**, a licença de conteúdo do Pixabay permite, em linhas gerais, baixar, usar, copiar, modificar e adaptar o conteúdo para fins comerciais ou não comerciais, sem obrigação de atribuição.
-
-A principal restrição relevante ao TOP GRAPHICS é a proibição de vender ou distribuir o conteúdo de forma isolada (*standalone*). A licença diferencia o arquivo original — ou uma alteração mínima que continue essencialmente igual — de seu uso incorporado a uma criação maior, como um aplicativo ou jogo. O Pixabay também recomenda verificar direitos de terceiros eventualmente associados ao conteúdo.
-
-A atribuição não é obrigatória, mas é recomendável registrar cada faixa usada. Antes de incorporar uma música, verificar a página individual da faixa e salvar o link, o nome do criador e a prova/registro da licença disponível na data do download. Os termos do Pixabay podem ser atualizados; conferir a versão vigente no momento de cada obtenção.
-
-### Modelo para registrar futuras faixas
-
-Adicionar uma linha por faixa efetivamente baixada:
-
-| Uso no projeto | Título da faixa | Criador | Página individual | Data do download | Licença/prova |
-|---|---|---|---|---|---|
-| Menu + inspeção | `A preencher` | `A preencher` | `URL da faixa` | `AAAA-MM-DD` | Pixabay Content License — guardar comprovante |
-| Voo — cenas 1 e 2 | `A preencher` | `A preencher` | `URL da faixa` | `AAAA-MM-DD` | Pixabay Content License — guardar comprovante |
-
-**Não usar apenas o link de uma busca/categoria como crédito final.** O registro deve apontar para a página individual de cada faixa selecionada.
+A Pixabay Content License permite baixar, usar, modificar e incorporar os arquivos de áudio em projetos comerciais e não comerciais (incluindo jogos e aplicações) sem exigência de atribuição, sendo vedada apenas a venda ou redistribuição isolada (*standalone*) dos arquivos originais como pacote de efeitos sonoros.
 
 ---
 
-## 4. Boas práticas de distribuição e manutenção
+## 4. Trilhas musicais
 
-- Manter este arquivo atualizado sempre que um áudio for adicionado, substituído ou removido.
-- Registrar o nome original do arquivo, a biblioteca/pacote de origem, o autor quando identificado, a URL de origem, a data do download e a licença aplicável.
-- Guardar cópias das licenças e dos `readme` originais em um local interno de documentação, sem republicar materiais protegidos.
-- Não assumir que a autorização de uma biblioteca se aplica a outra: cada faixa deve ser associada à sua fonte e licença específicas.
-- Não publicar WAVs originais ou recortados como pacote de áudio independente.
-- Antes de publicar o repositório, verificar os arquivos rastreados pelo Git. Para recursos cuja redistribuição não esteja autorizada, manter os assets fora do repositório público e documentar como obtê-los legalmente.
-- Distinguir no código e na documentação os placeholders, os recursos já integrados e os recursos cuja licença ainda está pendente de confirmação.
+As trilhas musicais foram integradas ao gerenciador (`AudioManager.set_music_context`) com *crossfade* suave de `1.5 s` entre o contexto de menus/inspeção e o contexto de voo.
 
-### Exemplo de referência no README principal
+| Arquivo no projeto | Contexto no simulador | Título / Faixa | Fonte individual | Status de licença |
+|---|---|---|---|---|
+| `assets/audio/music/menu_inspection.mp3` | Menu Principal e Cena 3 (Hangar de Inspeção) | **Gamer Menu** | [Pixabay — 431351](https://pixabay.com/pt/music/jogos-de-v%C3%ADdeo-gamer-menu-431351/) | Pixabay Content License (uso incorporado permitido; não distribuir como arquivo isolado) |
+| `assets/audio/music/flight.mp3` | Cenas 1 (Oceano / CVN-65) e 2 (Cânion) | **Danger Zone (Instrumental Version)** — *Hit Crew Masters* | [mp3.pm — 76653820](https://412284-hit-crew-masters.mp3.pm/song/76653820-danger-zone-instrumental-version/) | **Atenção — obra protegida por direitos autorais** (uso estritamente acadêmico/demonstrativo) |
 
-```markdown
-## Créditos de áudio
+### Observação importante sobre `flight.mp3`
 
-As fontes, os autores identificados e as informações de licenciamento dos efeitos sonoros e das trilhas utilizadas estão documentados em [audio_credits.md](audio_credits.md).
+A composição *Danger Zone* (originalmente interpretada por Kenny Loggins na trilha de *Top Gun*, aqui em versão instrumental atribuída a *Hit Crew Masters*) é uma obra musical protegida por direitos autorais de terceiros e **não** é licenciada sob licença livre/royalty-free.
 
-Os arquivos de áudio de terceiros permanecem sujeitos às respectivas licenças. Consulte esse documento antes de redistribuir o projeto ou seus assets.
-```
+- Seu uso neste repositório tem caráter **estritamente educacional e demonstrativo** na disciplina de Computação Gráfica.
+- Caso o projeto venha a ser distribuído comercialmente ou publicado em plataformas sujeitas a reivindicação de direitos autorais (*Content ID* / *DMCA*), substitua `assets/audio/music/flight.mp3` por uma faixa livre de royalties (por exemplo, da biblioteca do Pixabay). Como o campo `"optional": True` está ativo em `audio_config.py`, o simulador também executa normalmente mesmo na ausência do arquivo `.mp3`.
 
 ---
 
-## 5. Fontes consultadas
+## 5. Boas práticas de manutenção e distribuição
+
+- Manter este documento sincronizado com `src/audio_config.py` e com a seção **Créditos e Assets** do `README.md` sempre que um recurso sonoro for adicionado, substituído ou removido.
+- Não publicar os arquivos `.wav` ou `.mp3` de terceiros como pacote de áudio independente (*standalone*).
+- Respeitar os direitos dos autores originais e substituir recursos sem licença de redistribuição aberta antes de qualquer distribuição comercial.
+
+---
+
+## 6. Fontes e referências
 
 1. **Sonniss — GDC 2026 Game Audio Bundle:** <https://gdc.sonniss.com/>
 2. **Sonniss — #GameAudioGDC Bundle License:** <https://sonniss.com/gdc-bundle-license/>
-3. **Sonniss — versões anteriores da licença:** <https://sonniss.com/gdc-bundle-license/previous-versions/>
-4. **Fly Away Simulation — FS2004 Grumman F-14 Tomcat Sound Pack:** <https://flyawaysimulation.com/downloads/files/2910/fs2004-grumman-f-14-tomcat-sound-pack/>
-5. **Fly Away Simulation — Terms of Use & Privacy Policy:** <https://flyawaysimulation.com/terms-privacy/>
-6. **Pixabay — Music (busca Cinematic):** <https://pixabay.com/music/search/cinematic/>
-7. **Pixabay — Content License / Terms of Service:** <https://pixabay.com/service/terms/>
-8. **Pixabay — Content License Summary:** <https://pixabay.com/service/license-summary/>
-
+3. **Fly Away Simulation — FS2004 Grumman F-14 Tomcat Sound Pack:** <https://flyawaysimulation.com/downloads/files/2910/fs2004-grumman-f-14-tomcat-sound-pack/>
+4. **Fly Away Simulation — Terms of Use & Privacy Policy:** <https://flyawaysimulation.com/terms-privacy/>
+5. **Pixabay — Content License / Terms of Service:** <https://pixabay.com/service/terms/>
+6. **Pixabay — Content License Summary:** <https://pixabay.com/service/license-summary/>
+7. **Pixabay Music — Gamer Menu:** <https://pixabay.com/pt/music/jogos-de-v%C3%ADdeo-gamer-menu-431351/>
+8. **Danger Zone (Instrumental Version) — Hit Crew Masters:** <https://412284-hit-crew-masters.mp3.pm/song/76653820-danger-zone-instrumental-version/>
+9. **Pixabay SFX — Horror Boom Crash:** <https://pixabay.com/sound-effects/horror-boom-crash-487664/>
+10. **Pixabay SFX — Nature Water Splash Effect:** <https://pixabay.com/sound-effects/nature-water-splash-effect-443133/>
+11. **Pixabay SFX — Menu Click:** <https://pixabay.com/sound-effects/film-special-effects-menu-click-147357/>
+12. **Pixabay SFX — UI Sound:** <https://pixabay.com/sound-effects/film-special-effects-ui-sound-374228/>
+13. **Pixabay SFX — UI Close SFX:** <https://pixabay.com/sound-effects/technology-ui-close-sfx-513359/>
