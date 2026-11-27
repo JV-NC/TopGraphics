@@ -65,12 +65,12 @@ Construído integralmente via código, sem uso de motores de jogos prontos (*gam
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/media/scene3_inspection_skins.png" alt="Hangar de Inspeção 360 e Customização de Skins" width="100%" /><br />
+      <img src="docs/media/scene3_inspection_skins.gif" alt="Hangar de Inspeção 360 e Customização de Skins" width="100%" /><br />
       <strong>Cena 3 — Hangar de Inspeção & Skins</strong><br />
       <sub>Câmera orbital 360°, 7 padrões de skin e 5 paletas de camuflagem.</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/media/scene1_night_afterburner.png" alt="Voo Noturno com Pós-Combustores e Luar" width="100%" /><br />
+      <img src="docs/media/scene1_night_afterburner.gif" alt="Voo Noturno com Pós-Combustores e Luar" width="100%" /><br />
       <strong>Ciclo Dia/Noite — Operação Noturna</strong><br />
       <sub>420 estrelas, Lua cheia, reflexo lunar no mar e pós-combustão (<code>GL_LIGHT1</code>).</sub>
     </td>

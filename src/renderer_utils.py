@@ -2,7 +2,8 @@
 ================================================================================
 TopGraphics | renderer_utils.py
 Utilitários de renderização 3D compartilhados: carregamento de texturas de 'assets/texture/'
-(com fallback procedural), iluminação (Phong) e primitivas com normal automática.
+(com pré-processamento seamless para rocha/arenito, filtragem anisotrópica e fallback
+procedural), iluminação (Phong) e primitivas com normal automática.
 ================================================================================
 """
 
@@ -22,6 +23,88 @@ except ImportError:
 
 from math_utils import compute_normal
 
+# Constantes OpenGL para Filtragem Anisotrópica (nitidez em ângulos rasantes de solo/paredões)
+GL_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FE
+GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT = 0x84FF
+
+
+# ==============================================================================
+# UTILITÁRIOS DE SÍNTESE SEAMLESS PARA TEXTURAS DE TERRENO / ROCHA
+# ==============================================================================
+
+def _box_blur_2d(img2d, radius):
+    """Filtro média móvel 2D separável O(H*W) via somas cumulativas em NumPy."""
+    r = max(1, int(radius))
+    pad_x = np.pad(img2d, ((0, 0), (r, r)), mode="reflect")
+    cs_x = np.cumsum(np.pad(pad_x, ((0, 0), (1, 0)), mode="constant"), axis=1)
+    blur_x = (cs_x[:, 2 * r + 1:] - cs_x[:, :-2 * r - 1]) / float(2 * r + 1)
+
+    pad_y = np.pad(blur_x, ((r, r), (0, 0)), mode="reflect")
+    cs_y = np.cumsum(np.pad(pad_y, ((1, 0), (0, 0)), mode="constant"), axis=0)
+    blur_y = (cs_y[2 * r + 1:, :] - cs_y[:-2 * r - 1, :]) / float(2 * r + 1)
+    return blur_y
+
+
+def _make_seamless_tile_rgb(arr, level_strength=0.85, blur_div=5, per_channel_level=False):
+    """
+    Converte uma textura natural não-tileable (rocha/arenito ou oceano) em um tile
+    verdadeiramente seamless para GL_REPEAT (eliminando listras de borda e losangos
+    criados pelo GL_MIRRORED_REPEAT):
+      1. Equaliza variações de iluminação/cor de baixa frequência (remove vinhetas,
+         manchas centrais e bordas escuras).
+      2. Aplica wrap-blend separável (X e Y) preservando a variância/contraste local
+         para que bordas opostas casem sem costura nem perda de nitidez.
+    """
+    img_f = arr.astype(np.float32)
+    h, w = img_f.shape[:2]
+    if h < 32 or w < 32:
+        return img_f
+
+    r1 = max(12, min(h, w) // int(blur_div))
+    r2 = max(10, min(h, w) // (int(blur_div) + 2))
+
+    # 1. Equalização de iluminação global (high-pass suave)
+    if per_channel_level:
+        leveled = np.empty_like(img_f)
+        for ch in range(3):
+            low_ch = _box_blur_2d(_box_blur_2d(img_f[:, :, ch], r1), r2)
+            mean_ch = float(np.mean(img_f[:, :, ch]))
+            leveled[:, :, ch] = img_f[:, :, ch] + (mean_ch - low_ch) * float(level_strength)
+    else:
+        lum = 0.299 * img_f[:, :, 0] + 0.587 * img_f[:, :, 1] + 0.114 * img_f[:, :, 2]
+        low = _box_blur_2d(_box_blur_2d(lum, r1), r2)
+        mean_lum = float(np.mean(lum))
+        leveled = img_f + (mean_lum - low)[:, :, None] * float(level_strength)
+
+    # 2. Blend separável preservando contraste (1 / sqrt(m^2 + (1-m)^2))
+    ch_mean = np.mean(leveled, axis=(0, 1), keepdims=True)
+
+    # Emenda horizontal (X)
+    xs = np.linspace(0.0, 2.0 * math.pi, w, endpoint=False, dtype=np.float32)
+    wx = 0.5 * (1.0 - np.cos(xs))
+    mx = np.clip((wx - 0.12) / 0.76, 0.0, 1.0)
+    mx = mx * mx * (3.0 - 2.0 * mx)
+    roll_x = np.roll(leveled, w // 2, axis=1)
+    denom_x = np.sqrt(mx * mx + (1.0 - mx) ** 2)[None, :, None]
+    seam_x = ch_mean + (
+        (leveled - ch_mean) * mx[None, :, None]
+        + (roll_x - ch_mean) * (1.0 - mx[None, :, None])
+    ) / denom_x
+
+    # Emenda vertical (Y)
+    ys = np.linspace(0.0, 2.0 * math.pi, h, endpoint=False, dtype=np.float32)
+    wy = 0.5 * (1.0 - np.cos(ys))
+    my = np.clip((wy - 0.12) / 0.76, 0.0, 1.0)
+    my = my * my * (3.0 - 2.0 * my)
+    roll_y = np.roll(seam_x, h // 2, axis=0)
+    denom_y = np.sqrt(my * my + (1.0 - my) ** 2)[:, None, None]
+    seamless = ch_mean + (
+        (seam_x - ch_mean) * my[:, None, None]
+        + (roll_y - ch_mean) * (1.0 - my[:, None, None])
+    ) / denom_y
+
+    return np.clip(seamless, 0.0, 255.0)
+
 
 # ==============================================================================
 # UPLOAD E CARREGAMENTO DE TEXTURAS (ASSETS + FALLBACK PROCEDURAL)
@@ -30,9 +113,8 @@ from math_utils import compute_normal
 def upload_texture_rgb(img, mirrored_repeat=True, use_mipmaps=True):
     """
     Envia uma imagem RGB (numpy uint8, shape (altura, largura, 3)) ao OpenGL como
-    textura 2D. Utiliza GL_MIRRORED_REPEAT (para evitar costuras visíveis entre
-    ladrilhos adjacentes) e Mipmaps (para evitar serrilhado/cintilação no horizonte
-    e melhorar o desempenho de cache da GPU).
+    textura 2D, com Mipmaps e Filtragem Anisotrópica (até 16x) para nitidez em
+    ângulos rasantes.
     """
     img = np.ascontiguousarray(img, dtype=np.uint8)
     height, width = img.shape[:2]
@@ -46,6 +128,12 @@ def upload_texture_rgb(img, mirrored_repeat=True, use_mipmaps=True):
 
     if use_mipmaps:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR)
+        try:
+            max_aniso = glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT)
+            if max_aniso and max_aniso > 1.0:
+                glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, min(16.0, float(max_aniso)))
+        except Exception:
+            pass
         gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGB, width, height, GL_RGB, GL_UNSIGNED_BYTE, img)
     else:
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
@@ -59,7 +147,7 @@ def _resolve_asset_path(filename):
     Localiza um arquivo de textura dentro do diretório 'assets/texture/' independentemente
     de o script ter sido executado da raiz, de dentro de 'src/' ou empacotado via PyInstaller
     (suporte automático a sys._MEIPASS e ao diretório do executável compilado).
-    Também procura automaticamente por extensões alternativas (.jpg, .jpeg, .png, .bmp, .webp).
+    Também procura automaticamente por extensões alternativas (.png, .jpg, .jpeg, .bmp, .webp).
     """
     base_roots = []
     if getattr(sys, "frozen", False):
@@ -102,8 +190,10 @@ def _prepare_asset_image(arr, mode="auto"):
     """
     Pré-processamento leve e limpo para texturas de 'assets/texture/':
       1. Remove tarjas pretas horizontais/verticais de letterbox nas bordas.
-      2. Se a imagem estiver em escala de cinza escura (onde o brilho máximo é ~80/255),
-         expande a faixa dinâmica para destacar ondas ou estratos rochosos sob a luz.
+      2. No modo 'rock', equaliza a iluminação e gera bordas 100% seamless para GL_REPEAT
+         (eliminando os losangos/cruzes gerados pelo espelhamento em rochas diagonais).
+      3. Se a imagem estiver em escala de cinza escura, expande a faixa dinâmica e
+         aplica a paleta de oceano ou arenito natural.
     """
     row_means = arr.mean(axis=(1, 2))
     col_means = arr.mean(axis=(0, 2))
@@ -120,7 +210,16 @@ def _prepare_asset_image(arr, mode="auto"):
             c1 = max(c1 - 2, c0 + 32)
             arr = arr[r0:r1 + 1, c0:c1 + 1].copy()
 
-    arr_f = arr.astype(np.float32)
+    # Para rocha/arenito e oceano, equaliza iluminação e sintetiza tile seamless antes da colorização:
+    # No oceano, usa nivelamento por canal mais forte (0.98) para remover 100% de manchas/vinhetas
+    # macro (as ondas grandes já vêm da malha física de Gerstner), mantendo apenas as micro-ondulações!
+    if mode == "rock":
+        arr_f = _make_seamless_tile_rgb(arr, level_strength=0.85, blur_div=5, per_channel_level=False)
+    elif mode == "ocean":
+        arr_f = _make_seamless_tile_rgb(arr, level_strength=0.98, blur_div=8, per_channel_level=True)
+    else:
+        arr_f = arr.astype(np.float32)
+
     rg_diff = float(np.mean(np.abs(arr_f[:, :, 0] - arr_f[:, :, 1])))
     gb_diff = float(np.mean(np.abs(arr_f[:, :, 1] - arr_f[:, :, 2])))
 
@@ -137,37 +236,66 @@ def _prepare_asset_image(arr, mode="auto"):
             return np.stack([r, g, b], axis=-1).astype(np.uint8)
         elif mode == "rock":
             curved = norm ** 0.90
-            r = np.clip(68.0 + 165.0 * curved, 0.0, 255.0)
-            g = np.clip(54.0 + 138.0 * curved, 0.0, 255.0)
-            b = np.clip(42.0 + 108.0 * curved, 0.0, 255.0)
+            r = np.clip(74.0 + 162.0 * curved, 0.0, 255.0)
+            g = np.clip(56.0 + 134.0 * curved, 0.0, 255.0)
+            b = np.clip(42.0 + 102.0 * curved, 0.0, 255.0)
             return np.stack([r, g, b], axis=-1).astype(np.uint8)
 
-    return arr
+    return np.clip(arr_f, 0.0, 255.0).astype(np.uint8)
 
 
-def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_size=512):
+def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_size=512, mirrored_repeat=None):
     """
-    Carrega uma textura do diretório 'assets/texture/', aplica o pré-processamento leve,
-    redimensiona para potência de 2 (target_size x target_size) e envia ao OpenGL com Mipmaps.
-    Se o arquivo não for encontrado ou o Pillow não estiver instalado, executa fallback_fn().
+    Carrega uma textura do diretório 'assets/texture/', aplica o pré-processamento,
+    redimensiona para potência de 2 (int quadrado ou tupla (largura, altura)) e envia
+    ao OpenGL com Mipmaps e Filtragem Anisotrópica.
+    No modo 'rock', usa GL_REPEAT por padrão (pois o tile é convertido em seamless).
     """
+    if isinstance(target_size, (tuple, list)) and len(target_size) == 2:
+        dst_w, dst_h = int(target_size[0]), int(target_size[1])
+    else:
+        dst_w = dst_h = int(target_size)
+
+    if mirrored_repeat is None:
+        mirrored_repeat = (mode not in ("rock", "ocean"))
+
     asset_path = _resolve_asset_path(filename)
 
     if asset_path is not None and PIL_AVAILABLE:
         try:
             with Image.open(asset_path) as im:
-                im_rgb = im.convert("RGB")
-                arr = np.array(im_rgb, dtype=np.uint8)
+                # Se o PNG possuir canal alfa (ex: overlay transparente de água),
+                # recorta bordas transparentes e compõe sobre a cor mediana opaca
+                # em vez de preto, evitando molduras escuras repetidas no tiling!
+                if im.mode in ("RGBA", "LA") or ("transparency" in im.info):
+                    arr_rgba = np.array(im.convert("RGBA"), dtype=np.uint8)
+                    alpha = arr_rgba[:, :, 3]
+                    valid_r = np.where(alpha.mean(axis=1) > 40.0)[0]
+                    valid_c = np.where(alpha.mean(axis=0) > 40.0)[0]
+                    if len(valid_r) > 64 and len(valid_c) > 64:
+                        arr_rgba = arr_rgba[valid_r[0]:valid_r[-1] + 1, valid_c[0]:valid_c[-1] + 1]
+                        alpha = arr_rgba[:, :, 3]
+                    rgb_f = arr_rgba[:, :, :3].astype(np.float32)
+                    opaque = alpha > 180
+                    if np.any(opaque):
+                        bg_col = np.median(rgb_f[opaque], axis=0)
+                    else:
+                        bg_col = np.array([35.0, 95.0, 155.0], dtype=np.float32)
+                    a_norm = (alpha.astype(np.float32) / 255.0)[:, :, None]
+                    arr = np.clip(rgb_f * a_norm + bg_col[None, None, :] * (1.0 - a_norm), 0.0, 255.0).astype(np.uint8)
+                else:
+                    arr = np.array(im.convert("RGB"), dtype=np.uint8)
 
             arr = _prepare_asset_image(arr, mode=mode)
 
-            if arr.shape[0] != target_size or arr.shape[1] != target_size:
+            if arr.shape[1] != dst_w or arr.shape[0] != dst_h:
                 resample_filter = getattr(Image, "Resampling", Image).LANCZOS
-                im_resized = Image.fromarray(arr).resize((target_size, target_size), resample_filter)
+                im_resized = Image.fromarray(arr).resize((dst_w, dst_h), resample_filter)
                 arr = np.array(im_resized, dtype=np.uint8)
 
-            print(f"[Texturas] Carregada de assets/texture: '{os.path.basename(asset_path)}' ({target_size}x{target_size}, modo={mode})")
-            return upload_texture_rgb(arr, mirrored_repeat=True, use_mipmaps=True)
+            wrap_str = "MIRRORED" if mirrored_repeat else "REPEAT(seamless)"
+            print(f"[Texturas] Carregada de assets/texture: '{os.path.basename(asset_path)}' ({dst_w}x{dst_h}, modo={mode}, wrap={wrap_str})")
+            return upload_texture_rgb(arr, mirrored_repeat=mirrored_repeat, use_mipmaps=True)
 
         except Exception as exc:
             print(f"[Aviso] Falha ao carregar textura '{filename}' ({exc}). Usando fallback procedural.")
@@ -181,8 +309,7 @@ def load_texture_from_assets(filename, fallback_fn=None, mode="auto", target_siz
         return fallback_fn()
 
     default_img = np.full((64, 64, 3), 180, dtype=np.uint8)
-    return upload_texture_rgb(default_img)
-
+    return upload_texture_rgb(default_img, mirrored_repeat=mirrored_repeat)
 
 
 def load_window_icon_images(filename="icon.png", sizes=(16, 32, 48, 64, 128)):
@@ -197,7 +324,6 @@ def load_window_icon_images(filename="icon.png", sizes=(16, 32, 48, 64, 128)):
 
     icon_path = _resolve_asset_path(filename)
     if icon_path is None:
-        # Fallback opcional caso apenas icon.ico esteja presente em assets/
         icon_path = _resolve_asset_path("icon.ico")
     if icon_path is None:
         return []
@@ -225,16 +351,15 @@ def setup_lighting():
         eliminando sombras excessivamente escuras ao inclinar ou girar a aeronave.
     """
     glEnable(GL_LIGHTING)
-    glEnable(GL_LIGHT0)  # Luz 0: Sol Direcional (Key Light)
-    glEnable(GL_LIGHT1)  # Luz 1: Brilho dinâmico dos pós-combustores do F-14
-    glEnable(GL_LIGHT2)  # Luz 2: Preenchimento Hemisférico Celeste (Fill Light sem especular)
+    glEnable(GL_LIGHT0)
+    glEnable(GL_LIGHT1)
+    glEnable(GL_LIGHT2)
 
     glEnable(GL_COLOR_MATERIAL)
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
     glShadeModel(GL_SMOOTH)
     glEnable(GL_NORMALIZE)
 
-    # Luz ambiente global suave da abóbada celeste
     glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [0.16, 0.16, 0.18, 1.0])
 
     glLightfv(GL_LIGHT0, GL_AMBIENT,  [0.26, 0.24, 0.26, 1.0])

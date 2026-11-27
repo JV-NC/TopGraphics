@@ -51,36 +51,35 @@ SCENE1_HALF_PERIOD = 2400.0
 # ==============================================================================
 
 def _create_procedural_ocean_texture():
-    """Fallback procedural 128x128 caso 'assets/ocean_water.png' não seja encontrado."""
-    size = 128
-    img = np.zeros((size, size, 3), dtype=np.uint8)
-    for y in range(size):
-        for x in range(size):
-            wave = (
-                math.sin(x * 0.25) * 12
-                + math.cos(y * 0.25) * 12
-                + math.sin((x + y) * 0.15) * 8
-            )
-            r = np.clip(16 + wave * 0.5, 8, 52)
-            g = np.clip(62 + wave * 0.9, 38, 108)
-            b = np.clip(128 + wave * 1.4, 88, 185)
-            if x % 32 == 0 or y % 32 == 0:
-                r, g, b = min(255, r + 18), min(255, g + 26), min(255, b + 32)
-            img[y, x] = [int(r), int(g), int(b)]
-
-    return upload_texture_rgb(img)
+    """Fallback procedural 256x256 100% periódico (seamless, sem linhas de grade)."""
+    size = 256
+    ys = np.linspace(0.0, 2.0 * math.pi, size, endpoint=False, dtype=np.float32)[:, None]
+    xs = np.linspace(0.0, 2.0 * math.pi, size, endpoint=False, dtype=np.float32)[None, :]
+    wave = (
+        11.0 * np.sin(5.0 * xs + 2.0 * ys)
+        + 9.0 * np.cos(3.0 * xs - 6.0 * ys)
+        + 6.0 * np.sin(11.0 * xs + 8.0 * ys)
+        + 4.0 * np.cos(17.0 * xs - 13.0 * ys)
+    )
+    r = np.clip(32.0 + wave * 0.65, 14.0, 76.0)
+    g = np.clip(92.0 + wave * 1.05, 58.0, 148.0)
+    b = np.clip(162.0 + wave * 1.30, 118.0, 220.0)
+    img = np.stack([r, g, b], axis=-1).astype(np.uint8)
+    return upload_texture_rgb(img, mirrored_repeat=False, use_mipmaps=True)
 
 
 def create_ocean_texture():
     """
-    Carrega a textura 'assets/ocean_water.png' (convertendo automaticamente a faixa
-    de ondas monocromática para azul-oceânico naval com mipmaps e repetição espelhada).
+    Carrega 'assets/texture/ocean_water.png' convertendo-o em tile 100% seamless
+    com iluminação equalizada e repetição contínua (GL_REPEAT), eliminando listras
+    de borda e padrões de losango em grandes altitudes.
     """
     return load_texture_from_assets(
         "ocean_water.png",
         fallback_fn=_create_procedural_ocean_texture,
         mode="ocean",
         target_size=512,
+        mirrored_repeat=False,
     )
 
 
@@ -168,6 +167,7 @@ class OceanPhysicsSystem:
 
     GRID_N = 96                 # 96x96 = 9.216 partículas de superfície acopladas
     GRID_STEP = 18.0            # Espaçamento de 18m -> cobre 1710m x 1710m em alta resolução
+    OCEAN_UV_SCALE = 1.0 / 96.0 # 1 tile = 96m (50 ciclos exatos no Roundabout de 4800m; 3x menos repetição)
     MAX_PARTICLES = 1800        # Partículas hidrodinâmicas livres (spray, espuma e splash)
 
     def __init__(self):
@@ -556,19 +556,34 @@ class OceanPhysicsSystem:
         self.normals[:, :, 1] = inv_len
         self.normals[:, :, 2] = -dydz * inv_len
 
-        # Coordenadas UV dinâmicas com leve deriva de corrente marítima
-        uv_scale = 1.0 / 32.0
-        self.uvs[:, :, 0] = (wx + disp_x * 0.5) * uv_scale + sim_time * 0.012
-        self.uvs[:, :, 1] = (wz + disp_z * 0.5) * uv_scale + sim_time * 0.008
+        # Coordenadas UV dinâmicas com escala ampla (96m/tile) + distorção orgânica suave
+        # (quebra qualquer alinhamento retilíneo visto de grande altitude e zera na borda via edge_fade)
+        uv_scale = self.OCEAN_UV_SCALE
+        warp_u = (
+            0.16 * np.sin(wz * 0.0082 + wx * 0.0041 + sim_time * 0.14)
+            + 0.09 * np.cos(wx * 0.0125 - wz * 0.0095 - sim_time * 0.11)
+        ) * self.edge_fade
+        warp_v = (
+            0.16 * np.cos(wx * 0.0078 - wz * 0.0052 + sim_time * 0.12)
+            + 0.09 * np.sin(wz * 0.0118 + wx * 0.0086 - sim_time * 0.10)
+        ) * self.edge_fade
 
-        # Coloração física da água: azul profundo nos cavados, turquesa nas cristas e espuma branca
+        self.uvs[:, :, 0] = (wx + disp_x * 0.65) * uv_scale + warp_u + sim_time * 0.006
+        self.uvs[:, :, 1] = (wz + disp_z * 0.65) * uv_scale + warp_v + sim_time * 0.004
+
+        # Coloração física da água: azul profundo nos cavados, turquesa nas cristas,
+        # variação pelágica de grande escala (~350m) e espuma branca nas quebras
         height_norm = np.clip((total_y + 1.65) / 3.30, 0.0, 1.0)
         steepness = np.clip((total_y - 0.92) * 0.85, 0.0, 1.0)
         foam_factor = np.clip(steepness ** 1.6 + self.wake_foam * 0.92, 0.0, 1.0)
+        macro_swell = (
+            0.035 * np.sin(wx * 0.009 + wz * 0.006 - sim_time * 0.18)
+            + 0.025 * np.cos(wx * 0.005 - wz * 0.011 + sim_time * 0.12)
+        ) * self.edge_fade
 
-        r_col = (0.10 + 0.24 * height_norm) * (1.0 - foam_factor) + 0.94 * foam_factor
-        g_col = (0.36 + 0.38 * height_norm) * (1.0 - foam_factor) + 0.97 * foam_factor
-        b_col = (0.64 + 0.30 * height_norm) * (1.0 - foam_factor) + 1.00 * foam_factor
+        r_col = np.clip((0.10 + 0.24 * height_norm + macro_swell * 0.6) * (1.0 - foam_factor) + 0.94 * foam_factor, 0.0, 1.0)
+        g_col = np.clip((0.36 + 0.38 * height_norm + macro_swell * 1.0) * (1.0 - foam_factor) + 0.97 * foam_factor, 0.0, 1.0)
+        b_col = np.clip((0.64 + 0.30 * height_norm + macro_swell * 0.7) * (1.0 - foam_factor) + 1.00 * foam_factor, 0.0, 1.0)
 
         self.colors[:, :, 0] = r_col
         self.colors[:, :, 1] = g_col
@@ -636,21 +651,34 @@ class OceanPhysicsSystem:
                         fp2 = -fx * 0.026 + fz * 0.048 - sim_time * 1.35
                         self.p_pos[floating, 1] = 0.92 * np.cos(fp1) + 0.68 * np.cos(fp2) + 0.14
 
-    def _draw_horizon_ocean_skirt(self, player_pos, ocean_tex_id):
+    def _draw_horizon_ocean_skirt(self, player_pos, ocean_tex_id, sun_state=None):
         """
-        Desenha a saia oceânica externa (da borda da malha física em +-855m até +-3500m)
-        onde `edge_fade == 0`, garantindo continuidade perfeita até o Sky Dome sem costuras.
+        Desenha a saia oceânica externa (de +-855m até +-3450m) com a mesma escala UV
+        ampla (96m/tile) e transição atmosférica suave até o horizonte, eliminando
+        qualquer listra ou padrão repetitivo visível a grandes altitudes.
         """
         cx = self.snap_ix * self.GRID_STEP
         cz = self.snap_iz * self.GRID_STEP
         inner = 0.5 * (self.GRID_N - 1) * self.GRID_STEP
         outer = 3450.0
-        uv_s = 1.0 / 32.0
-        du = self.sim_time * 0.012
-        dv = self.sim_time * 0.008
+        uv_s = self.OCEAN_UV_SCALE
+        du = self.sim_time * 0.006
+        dv = self.sim_time * 0.004
+
+        inner_col = (0.22, 0.55, 0.79, 1.0)
+        # Suaviza a borda distante do mar em direção à bruma do horizonte (perspectiva aérea)
+        if sun_state is not None and "horizon_color" in sun_state:
+            hc = sun_state["horizon_color"]
+            outer_col = (
+                float(0.65 * inner_col[0] + 0.35 * min(0.85, float(hc[0]))),
+                float(0.65 * inner_col[1] + 0.35 * min(0.85, float(hc[1]))),
+                float(0.65 * inner_col[2] + 0.35 * min(0.95, float(hc[2]))),
+                1.0,
+            )
+        else:
+            outer_col = (0.34, 0.62, 0.84, 1.0)
 
         glBindTexture(GL_TEXTURE_2D, ocean_tex_id)
-        glColor4f(0.22, 0.55, 0.79, 1.0)
         glNormal3f(0.0, 1.0, 0.0)
 
         # 4 grandes trapézios conectando o perímetro interno da malha de partículas ao horizonte
@@ -671,7 +699,8 @@ class OceanPhysicsSystem:
 
         glBegin(GL_QUADS)
         for p1, p2, p3, p4 in rings:
-            for pt in (p1, p2, p3, p4):
+            for pt, col in ((p1, inner_col), (p2, inner_col), (p3, outer_col), (p4, outer_col)):
+                glColor4f(*col)
                 glTexCoord2f(pt[0] * uv_s + du, pt[2] * uv_s + dv)
                 glVertex3f(pt[0], pt[1], pt[2])
         glEnd()
@@ -784,7 +813,7 @@ class OceanPhysicsSystem:
         glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 56.0)
 
         # 1. Saia de horizonte externa conectada sem costuras à borda da malha física
-        self._draw_horizon_ocean_skirt(aircraft.pos, ocean_tex_id)
+        self._draw_horizon_ocean_skirt(aircraft.pos, ocean_tex_id, sun_state=sun_state)
 
         # 2. Malha física de partículas acopladas (96x96 = 18.050 triângulos via Client Arrays)
         glEnableClientState(GL_VERTEX_ARRAY)

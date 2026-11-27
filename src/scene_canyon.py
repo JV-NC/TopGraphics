@@ -170,28 +170,30 @@ def check_canyon_rock_collisions(pos, right_vec=None, forward_vec=None):
 # ==============================================================================
 
 def _create_procedural_canyon_texture():
-    """Fallback procedural 128x128 caso as texturas de 'assets/texture/' não sejam encontradas."""
-    size = 128
-    img = np.zeros((size, size, 3), dtype=np.uint8)
-    for y in range(size):
-        strata = math.sin(y * 0.22) * 18 + math.cos(y * 0.08) * 14
-        for x in range(size):
-            grain = math.sin(x * 0.35 + y * 0.15) * 8
-            r = np.clip(155 + strata + grain, 90, 215)
-            g = np.clip(105 + strata * 0.7 + grain, 60, 165)
-            b = np.clip(72 + strata * 0.5 + grain, 40, 120)
-            img[y, x] = [int(r), int(g), int(b)]
-
-    return upload_texture_rgb(img)
+    """Fallback procedural 256x128 100% periódico (seamless) caso sandstone não seja encontrado."""
+    h, w = 128, 256
+    ys = np.linspace(0.0, 2.0 * math.pi, h, endpoint=False, dtype=np.float32)[:, None]
+    xs = np.linspace(0.0, 2.0 * math.pi, w, endpoint=False, dtype=np.float32)[None, :]
+    strata = 18.0 * np.sin(5.0 * ys + 0.4 * np.sin(2.0 * xs)) + 14.0 * np.cos(2.0 * ys)
+    grain = 8.0 * np.sin(11.0 * xs + 4.0 * ys) + 4.0 * np.cos(19.0 * xs - 7.0 * ys)
+    r = np.clip(158.0 + strata + grain, 90.0, 220.0)
+    g = np.clip(108.0 + strata * 0.72 + grain * 0.8, 60.0, 170.0)
+    b = np.clip(74.0 + strata * 0.52 + grain * 0.6, 40.0, 125.0)
+    img = np.stack([r, g, b], axis=-1).astype(np.uint8)
+    return upload_texture_rgb(img, mirrored_repeat=False, use_mipmaps=True)
 
 
 def create_canyon_texture():
-    """Carrega sandstone.png ou usa a textura procedural como fallback."""
+    """
+    Carrega sandstone.png/.jpg em resolução 1024x512 (preservando a proporção 2:1
+    dos estratos horizontais), equalizado e convertido em tile seamless para GL_REPEAT.
+    """
     return load_texture_from_assets(
         "sandstone.png",
         fallback_fn=_create_procedural_canyon_texture,
         mode="rock",
-        target_size=512,
+        target_size=(1024, 512),
+        mirrored_repeat=False,
     )
 
 
@@ -688,11 +690,62 @@ def draw_canyon_dust(sun_state=None, wireframe_mode=False):
 
 
 # ==============================================================================
-# MODELAGEM DE MATACÃO / ROCHA FACETADA 3D COM MAPEAMENTO UV
+# PROJEÇÃO UV TRIPLANAR MÉTRICA E ESTRATIFICAÇÃO GEOLÓGICA DO CÂNION
+# ==============================================================================
+# Textura sandstone é 1024x512 (proporção 2:1).
+# Escalas métricas exatas para manter texels 100% quadrados (0.078 m/px) e fechar
+# múltiplos inteiros exatos no domínio periódico Roundabout (GL_REPEAT):
+#   - 720m * (1/80)  =  9.0 ciclos inteiros em X
+#   - 2000m * (1/80) = 25.0 ciclos inteiros em Z (paredões)
+#   - 2000m * (1/40) = 50.0 ciclos inteiros em Z (leito)
+CANYON_UV_SCALE_U = 1.0 / 80.0    # 1 tile = 80m na direção dos estratos (1024 px)
+CANYON_UV_SCALE_V = 1.0 / 40.0    # 1 tile = 40m perpendicular aos estratos (512 px)
+
+
+def _project_canyon_triplanar_uv(pt, normal, scale_u=CANYON_UV_SCALE_U, scale_v=CANYON_UV_SCALE_V):
+    """
+    Projeta coordenadas UV métricas segundo o eixo dominante da normal do triângulo:
+      - Superfícies horizontais (|ny| dominante — leito/platôs): plano XZ (u=x, v=z).
+      - Paredões laterais Leste/Oeste (|nx| dominante): plano ZY (u=z, v=y) — alinha
+        os estratos sedimentares horizontalmente ao longo do cânion em AMBOS os lados,
+        eliminando completamente o estiramento vertical da parede esquerda!
+      - Curvas escarpadas Norte/Sul (|nz| dominante): plano XY (u=x, v=y).
+    """
+    vx, vy, vz = float(pt[0]), float(pt[1]), float(pt[2])
+    nx, ny, nz = abs(float(normal[0])), abs(float(normal[1])), abs(float(normal[2]))
+
+    if ny >= nx and ny >= nz:
+        return vx * scale_u, vz * scale_v
+    if nx >= ny and nx >= nz:
+        return vz * scale_u, vy * scale_v
+    return vx * scale_u, vy * scale_v
+
+
+def _canyon_strata_vertex_color(y):
+    """
+    Aplica modulação sutil de cor por altitude simulando estratos sedimentares reais
+    de arenito (areia clara no leito, camadas terracota/ocre nas paredes, topo iluminado),
+    quebrando uniformidade visual ao longo dos 2000m sem alterar a continuidade periódica.
+    """
+    if y < 6.0:
+        return (0.95, 0.87, 0.76)
+
+    # Faixas geológicas horizontais suaves em função da altura Y
+    band = 0.5 + 0.5 * math.sin(y * 0.14 + 0.4 * math.sin(y * 0.045))
+    elev_t = min(1.0, max(0.0, (y - 6.0) / 145.0))
+
+    r = 0.86 + 0.12 * band + 0.04 * elev_t
+    g = 0.72 + 0.14 * band + 0.08 * elev_t
+    b = 0.62 + 0.13 * band + 0.11 * elev_t
+    return (min(1.0, r), min(1.0, g), min(1.0, b))
+
+
+# ==============================================================================
+# MODELAGEM DE MATACÃO / ROCHA FACETADA 3D COM MAPEAMENTO UV TRIPLANAR
 # ==============================================================================
 
 def _draw_procedural_boulder(boulder):
-    """Desenha um matacão/rocha 3D facetado usando a textura sandstone.png."""
+    """Desenha um matacão/rocha 3D facetado com projeção UV triplanar sem estiramento."""
     rng = np.random.default_rng(boulder["seed"])
     rx, ry, rz = boulder["rx"], boulder["ry"], boulder["rz"]
 
@@ -713,9 +766,7 @@ def _draw_procedural_boulder(boulder):
             px = rx * r_ring * math.cos(ang) * perturb
             pz = rz * r_ring * math.sin(ang) * perturb
             py = y_ring * float(rng.uniform(0.88, 1.12)) if st > 0 else 0.0
-            u_coord = (sl / float(n_slices)) * 2.0
-            v_coord = v_frac * 1.5
-            ring_pts.append(([px, py, pz], u_coord, v_coord))
+            ring_pts.append([px, py, pz])
         rings.append(ring_pts)
 
     top_pt = [0.0, ry * float(rng.uniform(0.92, 1.06)), 0.0]
@@ -724,8 +775,20 @@ def _draw_procedural_boulder(boulder):
     glTranslatef(boulder["x"], boulder["y_base"], boulder["z"])
     glRotatef(boulder["yaw"], 0.0, 1.0, 0.0)
 
-    shade = float(rng.uniform(0.80, 0.96))
-    glColor3f(shade, shade * 0.95, shade * 0.90)
+    shade = float(rng.uniform(0.78, 0.94))
+    glColor3f(shade, shade * 0.90, shade * 0.82)
+
+    # Escala triplanar própria para o porte das rochas (6m..16m) mantendo proporção 2:1
+    b_scale_u = 1.0 / 28.0
+    b_scale_v = 1.0 / 14.0
+
+    def _emit_boulder_tri(pa, pb, pc):
+        n = compute_normal(pa, pb, pc)
+        glNormal3fv(n)
+        for pt in (pa, pb, pc):
+            u, v = _project_canyon_triplanar_uv(pt, n, b_scale_u, b_scale_v)
+            glTexCoord2f(u, v)
+            glVertex3fv(pt)
 
     glBegin(GL_TRIANGLES)
     for st in range(n_stacks - 1):
@@ -733,58 +796,43 @@ def _draw_procedural_boulder(boulder):
         next_r = rings[st + 1]
         for sl in range(n_slices):
             sl_next = (sl + 1) % n_slices
-            p00, u00, v00 = curr_r[sl]
-            p10, u10, v10 = curr_r[sl_next]
-            p01, u01, v01 = next_r[sl]
-            p11, u11, v11 = next_r[sl_next]
-
-            n1 = compute_normal(p00, p10, p11)
-            glNormal3fv(n1)
-            glTexCoord2f(u00, v00); glVertex3fv(p00)
-            glTexCoord2f(u10, v10); glVertex3fv(p10)
-            glTexCoord2f(u11, v11); glVertex3fv(p11)
-
-            n2 = compute_normal(p00, p11, p01)
-            glNormal3fv(n2)
-            glTexCoord2f(u00, v00); glVertex3fv(p00)
-            glTexCoord2f(u11, v11); glVertex3fv(p11)
-            glTexCoord2f(u01, v01); glVertex3fv(p01)
+            p00 = curr_r[sl]
+            p10 = curr_r[sl_next]
+            p01 = next_r[sl]
+            p11 = next_r[sl_next]
+            _emit_boulder_tri(p00, p10, p11)
+            _emit_boulder_tri(p00, p11, p01)
 
     last_r = rings[-1]
     for sl in range(n_slices):
         sl_next = (sl + 1) % n_slices
-        p0, u0, v0 = last_r[sl]
-        p1, u1, v1 = last_r[sl_next]
-        n_top = compute_normal(p0, p1, top_pt)
-        glNormal3fv(n_top)
-        glTexCoord2f(u0, v0); glVertex3fv(p0)
-        glTexCoord2f(u1, v1); glVertex3fv(p1)
-        glTexCoord2f(0.5 * (u0 + u1), 2.0); glVertex3fv(top_pt)
+        _emit_boulder_tri(last_r[sl], last_r[sl_next], top_pt)
     glEnd()
 
     glPopMatrix()
 
 
 # ==============================================================================
-# CONSTRUÇÃO DA CENA 2 (DISPLAY LIST PERIÓDICA)
+# CONSTRUÇÃO DA CENA 2 (DISPLAY LIST PERIÓDICA COM UV TRIPLANAR MÉTRICO)
 # ==============================================================================
 
 def build_scene2_canyon_list(canyon_tex_id):
     """
     Compila a Cena 2: Cânion Procedural ("Trench Run" de Top Gun: Maverick).
-    Malha gerada exatamente em X = [-360..+360] (passo 18m) e Z = [-1500..+500] (passo 20m)
-    com uv_world_scale = 0.05 (múltiplo par exato do período em X e Z para GL_MIRRORED_REPEAT).
+    Malha periódica refinada em X = [-360..+360] (passo 12m, 60 células) e
+    Z = [-1500..+500] (passo 16m, 125 células), utilizando Projeção UV Triplanar
+    Métrica + textura seamless 1024x512 (GL_REPEAT) sem estiramento em nenhum paredão.
     """
     dlist = glGenLists(1)
     glNewList(dlist, GL_COMPILE)
 
     glEnable(GL_TEXTURE_2D)
     glBindTexture(GL_TEXTURE_2D, canyon_tex_id)
-    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.20, 0.18, 0.15, 1.0])
-    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 14.0)
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, [0.16, 0.14, 0.12, 1.0])
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, 12.0)
 
-    dx = 18.0
-    dz = 20.0
+    dx = 12.0
+    dz = 16.0
     xs = np.linspace(SCENE2_X_MIN, SCENE2_X_MAX, int(round(SCENE2_SPAN_X / dx)) + 1)
     zs = np.linspace(SCENE2_Z_MIN, SCENE2_Z_MAX, int(round(SCENE2_SPAN_Z / dz)) + 1)
 
@@ -792,85 +840,49 @@ def build_scene2_canyon_list(canyon_tex_id):
     for i, x in enumerate(xs):
         for j, z in enumerate(zs):
             heights[i, j] = canyon_height_func(float(x), float(z))
+    # Garante igualdade numérica exata nas bordas de costura Roundabout
     heights[-1, :] = heights[0, :]
     heights[:, -1] = heights[:, 0]
 
-    uv_world_scale = 0.05
-
-    # 1A. Malha do leito do cânion (usa sandstone.png)
+    # 1. Malha unificada do cânion com Projeção UV Triplanar Métrica e estratos por altitude
     glBegin(GL_TRIANGLES)
     for i in range(len(xs) - 1):
+        x0, x1 = float(xs[i]), float(xs[i + 1])
         for j in range(len(zs) - 1):
+            z0, z1 = float(zs[j]), float(zs[j + 1])
             y00, y10 = float(heights[i, j]), float(heights[i + 1, j])
             y01, y11 = float(heights[i, j + 1]), float(heights[i + 1, j + 1])
-            avg_y = 0.25 * (y00 + y10 + y01 + y11)
-            if avg_y >= 6.5:
-                continue
 
-            x0, x1 = float(xs[i]), float(xs[i + 1])
-            z0, z1 = float(zs[j]), float(zs[j + 1])
-            p00, p10 = [x0, y00, z0], [x1, y10, z0]
-            p01, p11 = [x0, y01, z1], [x1, y11, z1]
+            p00 = [x0, y00, z0]
+            p10 = [x1, y10, z0]
+            p01 = [x0, y01, z1]
+            p11 = [x1, y11, z1]
 
-            u00, v00 = x0 * uv_world_scale, z0 * uv_world_scale
-            u10, v10 = x1 * uv_world_scale, z0 * uv_world_scale
-            u01, v01 = x0 * uv_world_scale, z1 * uv_world_scale
-            u11, v11 = x1 * uv_world_scale, z1 * uv_world_scale
+            c00 = _canyon_strata_vertex_color(y00)
+            c10 = _canyon_strata_vertex_color(y10)
+            c01 = _canyon_strata_vertex_color(y01)
+            c11 = _canyon_strata_vertex_color(y11)
 
-            glColor3f(0.94, 0.90, 0.84)
-
+            # Triângulo 1: (p00, p01, p11)
             n1 = compute_normal(p00, p01, p11)
             glNormal3fv(n1)
-            glTexCoord2f(u00, v00); glVertex3fv(p00)
-            glTexCoord2f(u01, v01); glVertex3fv(p01)
-            glTexCoord2f(u11, v11); glVertex3fv(p11)
+            for pt, col in ((p00, c00), (p01, c01), (p11, c11)):
+                u, v = _project_canyon_triplanar_uv(pt, n1)
+                glColor3fv(col)
+                glTexCoord2f(u, v)
+                glVertex3fv(pt)
 
+            # Triângulo 2: (p00, p11, p10)
             n2 = compute_normal(p00, p11, p10)
             glNormal3fv(n2)
-            glTexCoord2f(u00, v00); glVertex3fv(p00)
-            glTexCoord2f(u11, v11); glVertex3fv(p11)
-            glTexCoord2f(u10, v10); glVertex3fv(p10)
+            for pt, col in ((p00, c00), (p11, c11), (p10, c10)):
+                u, v = _project_canyon_triplanar_uv(pt, n2)
+                glColor3fv(col)
+                glTexCoord2f(u, v)
+                glVertex3fv(pt)
     glEnd()
 
-    # 1B. Malha dos paredões rochosos e topo das montanhas (usa sandstone.png)
-    glBegin(GL_TRIANGLES)
-    for i in range(len(xs) - 1):
-        for j in range(len(zs) - 1):
-            y00, y10 = float(heights[i, j]), float(heights[i + 1, j])
-            y01, y11 = float(heights[i, j + 1]), float(heights[i + 1, j + 1])
-            avg_y = 0.25 * (y00 + y10 + y01 + y11)
-            if avg_y < 6.5:
-                continue
-
-            x0, x1 = float(xs[i]), float(xs[i + 1])
-            z0, z1 = float(zs[j]), float(zs[j + 1])
-            p00, p10 = [x0, y00, z0], [x1, y10, z0]
-            p01, p11 = [x0, y01, z1], [x1, y11, z1]
-
-            u00, v00 = (x0 + y00 * 0.45) * uv_world_scale, z0 * uv_world_scale
-            u10, v10 = (x1 + y10 * 0.45) * uv_world_scale, z0 * uv_world_scale
-            u01, v01 = (x0 + y01 * 0.45) * uv_world_scale, z1 * uv_world_scale
-            u11, v11 = (x1 + y11 * 0.45) * uv_world_scale, z1 * uv_world_scale
-
-            if avg_y < 85.0:
-                glColor3f(0.92, 0.88, 0.84)
-            else:
-                glColor3f(1.00, 0.96, 0.92)
-
-            n1 = compute_normal(p00, p01, p11)
-            glNormal3fv(n1)
-            glTexCoord2f(u00, v00); glVertex3fv(p00)
-            glTexCoord2f(u01, v01); glVertex3fv(p01)
-            glTexCoord2f(u11, v11); glVertex3fv(p11)
-
-            n2 = compute_normal(p00, p11, p10)
-            glNormal3fv(n2)
-            glTexCoord2f(u00, v00); glVertex3fv(p00)
-            glTexCoord2f(u11, v11); glVertex3fv(p11)
-            glTexCoord2f(u10, v10); glVertex3fv(p10)
-    glEnd()
-
-    # 2. Rochas / matacões 3D gerados proceduralmente (usam sandstone.png)
+    # 2. Rochas / matacões 3D gerados proceduralmente (usam sandstone com UV triplanar)
     for boulder in CANYON_ROCK_OBSTACLES:
         _draw_procedural_boulder(boulder)
 

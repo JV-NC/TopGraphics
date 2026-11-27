@@ -55,10 +55,15 @@ class MenuUI:
             self.temp_volumes["music"] = audio_manager.volumes.get("music", 0.35)
 
     def apply_volumes_to_manager(self, audio_manager):
-        """Aplica os valores dos sliders ao AudioManager."""
+        """Aplica os valores dos sliders ao AudioManager (SFX também ajusta turbinas/combustores)."""
         if audio_manager is not None:
+            sfx_val = float(self.temp_volumes["sfx"])
             audio_manager.set_master_volume(self.temp_volumes["master"])
-            audio_manager.set_category_volume("sfx", self.temp_volumes["sfx"])
+            audio_manager.set_category_volume("sfx", sfx_val)
+            # Garante sincronização de 'engine' mesmo se AudioManager for chamado isoladamente
+            expected_eng = float(np.clip(sfx_val * (0.80 / 0.85), 0.0, 1.0))
+            if "engine" in audio_manager.volumes and abs(audio_manager.volumes["engine"] - expected_eng) > 1e-3:
+                audio_manager.set_category_volume("engine", expected_eng)
             audio_manager.set_category_volume("ambience", self.temp_volumes["ambience"])
             audio_manager.set_category_volume("music", self.temp_volumes["music"])
             print("[Configurações] Volumes aplicados com sucesso!")

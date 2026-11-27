@@ -279,19 +279,35 @@ class AudioManager:
     # INDEXAÇÃO E CARREGAMENTO DE ARQUIVOS WAV
     # --------------------------------------------------------------------------
 
-    def _build_asset_file_index(self):
+    def _get_search_base_roots(self):
         """
-        Indexa recursivamente todos os arquivos .wav/.ogg/.flac dentro de 'assets/'
-        para localizá-los instantaneamente mesmo que estejam em subpastas diferentes
-        ou com capitalização distinta (ex: GEARDOWN.wav vs geardown.wav).
+        Retorna os diretórios raiz de busca para assets, priorizando executáveis
+        compilados com PyInstaller (pasta do executável e sys._MEIPASS) e mantendo
+        compatibilidade total com execução direta via Python.
         """
+        roots = []
+        if getattr(sys, "frozen", False):
+            roots.append(os.path.dirname(os.path.abspath(sys.executable)))
+            meipass = getattr(sys, "_MEIPASS", None)
+            if meipass:
+                roots.append(meipass)
+
         module_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(module_dir)
-        search_roots = [
-            os.path.join(project_root, "assets"),
-            os.path.join(module_dir, "assets"),
-            os.path.join(os.getcwd(), "assets"),
-        ]
+        roots.extend([project_root, module_dir, os.getcwd()])
+
+        unique_roots = []
+        for r in roots:
+            if r and r not in unique_roots:
+                unique_roots.append(r)
+        return unique_roots
+
+    def _build_asset_file_index(self):
+        """
+        Indexa recursivamente todos os arquivos .wav/.ogg/.flac/.mp3 dentro de 'assets/'
+        para localizá-los instantaneamente (tanto em código-fonte quanto em PyInstaller).
+        """
+        search_roots = [os.path.join(r, "assets") for r in self._get_search_base_roots()]
         for root_dir in search_roots:
             if not os.path.isdir(root_dir):
                 continue
@@ -309,10 +325,7 @@ class AudioManager:
         if not configured_path:
             return None
 
-        module_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(module_dir)
-
-        for base in (project_root, module_dir, os.getcwd()):
+        for base in self._get_search_base_roots():
             candidate = os.path.join(base, configured_path)
             if os.path.isfile(candidate):
                 return candidate
@@ -1001,10 +1014,23 @@ class AudioManager:
         self.volumes["master"] = float(np.clip(value, 0.0, 1.0))
         print(f"[Áudio] Volume Geral (Master): {int(round(self.volumes['master'] * 100))}%")
 
-    def set_category_volume(self, category, value):
+    def set_category_volume(self, category, value, sync_engine=True):
+        """
+        Ajusta o volume de uma categoria ('sfx', 'engine', 'ambience', 'music').
+        Ao alterar 'sfx' com sync_engine=True, sincroniza proporcionalmente a categoria
+        'engine' (turbinas, combustores e pós-combustor), preservando o balanço da mixagem
+        e garantindo silêncio total das turbinas quando SFX for zerado.
+        """
         if category in self.volumes:
-            self.volumes[category] = float(np.clip(value, 0.0, 1.0))
-            print(f"[Áudio] Volume '{category}': {int(round(self.volumes[category] * 100))}%")
+            clamped = float(np.clip(value, 0.0, 1.0))
+            self.volumes[category] = clamped
+            print(f"[Áudio] Volume '{category}': {int(round(clamped * 100))}%")
+            if category == "sfx" and sync_engine and "engine" in self.volumes:
+                base_sfx = max(1e-4, float(DEFAULT_VOLUMES.get("sfx", 0.85)))
+                base_eng = float(DEFAULT_VOLUMES.get("engine", 0.80))
+                eng_vol = float(np.clip(clamped * (base_eng / base_sfx), 0.0, 1.0))
+                self.volumes["engine"] = eng_vol
+                print(f"[Áudio] Volume 'engine' (turbinas/combustores): {int(round(eng_vol * 100))}%")
 
     def set_clip_volume(self, name, value):
         if name in self.voices:
