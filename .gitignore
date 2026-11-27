@@ -7,4 +7,5 @@ release
 dist
 build
 *.spec
-docs/Slides_TopGraphics.pptx
+docs/*.pptx
+docs/*.tex
